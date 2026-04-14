@@ -15,7 +15,6 @@
 smart-meeting-assistant/
 ├─ frontend/                  # Vue 3 前端
 ├─ backend/                   # FastAPI 后端
-├─ model/                     # 历史模型服务目录，当前不走主链路
 ├─ .env.example               # 后端 / compose 环境模板
 ├─ docker-compose.yml
 └─ README.md
@@ -311,7 +310,6 @@ ws://localhost:8080/ws/meeting?scene=hr
 - `.env.example` 和 `frontend/.env.example` 都只放模板，不要写真实密钥
 - 当前 `speaker` 仍是占位逻辑，不是真正的 diarization
 - 阿里云 ASR token 逻辑已抽象，但仍建议后续补正式 token / STS 方案
-- `model` 目录仍保留，便于参考旧实现；当前运行主链路不依赖它
 
 ## License
 
