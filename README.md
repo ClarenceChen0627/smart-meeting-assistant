@@ -102,6 +102,35 @@ AUDIO_SAMPLE_RATE=16000
 AUDIO_CHANNELS=1
 ```
 
+这些配置推荐直接写在根目录 `.env` 中；如果你更习惯用系统环境变量注入，也可以使用 `export` 的方式设置。
+
+#### 1. 阿里云 DashScope API Key
+
+用于 LLM 总结功能：
+
+1. 访问 [阿里云百炼平台](https://dashscope.aliyun.com/)
+2. 注册并获取 API Key
+3. 将 `DASHSCOPE_API_KEY` 写入根目录 `.env`，或者直接设置环境变量：
+
+```bash
+export DASHSCOPE_API_KEY=your-dashscope-api-key
+```
+
+#### 2. 阿里云语音识别配置
+
+用于语音转文字和说话人分离：
+
+1. 访问 [阿里云智能语音交互](https://nls-portal.console.aliyun.com/)
+2. 开通录音文件识别服务
+3. 获取 `AppKey`、`AccessKeyId` 和 `AccessKeySecret`
+4. 将这些配置写入根目录 `.env`，或者直接设置环境变量：
+
+```bash
+export ALIYUN_ASR_APP_KEY=your-app-key
+export ALIYUN_ACCESS_KEY_ID=your-access-key-id
+export ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
+```
+
 后端会按这个顺序读取配置：
 
 1. 项目根目录 `.env`
