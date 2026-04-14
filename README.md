@@ -176,9 +176,9 @@ VITE_WS_BASE_URL=ws://192.168.1.10:8080
 ```bash
 cd backend
 python -m venv .venv
-. .venv/bin/activate
+source .venv/Scripts/activate
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 Windows PowerShell:
@@ -188,7 +188,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 后端地址：
