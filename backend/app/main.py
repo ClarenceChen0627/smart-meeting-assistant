@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.api.health import router as health_router
 from app.api.transcribe import router as transcribe_router
@@ -20,6 +22,7 @@ from app.services.summary_service import SummaryService
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -77,3 +80,8 @@ async def root() -> dict:
         "version": settings.service_version,
         "status": "running",
     }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.ico")
