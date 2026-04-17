@@ -1,13 +1,11 @@
 # Smart Meeting Assistant
 
-实时会议助手，支持浏览器录音、实时转写、场景化总结，以及基于 WebSocket 的双向交互。
+实时会议助手，支持浏览器实时录音、实时转写、场景化总结，以及基于 WebSocket 的双向交互。
 
 当前主架构：
 
 - `frontend`: Vue 3 + TypeScript + Vite
 - `backend`: FastAPI + Uvicorn
-
-前端后端地址也已支持环境变量配置，不再写死在组件代码里。
 
 ## 项目结构
 
@@ -15,7 +13,7 @@
 smart-meeting-assistant/
 ├─ frontend/                  # Vue 3 前端
 ├─ backend/                   # FastAPI 后端
-├─ .env.example               # 后端 / compose 环境模板
+├─ .env.example               # 后端 / docker-compose 环境变量模板
 ├─ docker-compose.yml
 └─ README.md
 ```
@@ -29,6 +27,7 @@ smart-meeting-assistant/
 - Vite
 - Element Plus
 - WebSocket
+- Web Audio API
 
 ### 后端
 
@@ -36,43 +35,41 @@ smart-meeting-assistant/
 - Uvicorn
 - Pydantic
 - httpx
+- websockets
 - python-dotenv
 - ffmpeg
 
 ### 外部能力
 
-- 阿里云 ASR：语音转写
-- DashScope / Qwen：会议总结
+- DashScope Paraformer Realtime ASR: 实时语音转写
+- DashScope / Qwen: 会议总结
 
-## 核心功能
+## 当前工作流
 
-1. 浏览器采集麦克风音频并通过 WebSocket 发送到后端
-2. 后端将浏览器 `webm/opus` 转换为标准 `wav`
-3. 调用阿里云 ASR 获取转写结果
-4. 按会话顺序推送 `transcript`
-5. 按场景生成 `summary`
-6. 停止录音时通过 `finalize` 确保最终 summary 先返回，再关闭连接
+1. 前端通过麦克风采集音频
+2. 前端将音频转换为 `16kHz / 单声道 / PCM16`，通过 WebSocket 发送到后端
+3. 后端将 PCM 音频流转发到 DashScope `paraformer-realtime-v1`
+4. 后端将转写结果实时推送为 `transcript`
+5. 后端按场景生成 `summary`
+6. 停止录音时，前端发送 `finalize`，后端返回最终 `summary` 后关闭连接
+
+说明：
+
+- 当前会议实时转写不再使用阿里云 NLS `FlashRecognizer`
+- `ffmpeg` 现在主要用于 `/api/transcribe` 上传文件接口的音频转码
 
 ## 运行要求
 
 - Node.js 18+
 - Python 3.10+
 - ffmpeg
-- 可用的阿里云 / DashScope 凭证
+- 可用的 DashScope API Key
 
-## 配置文件约定
+## 环境变量
 
-这个项目现在有两类配置文件，职责分开：
+根目录 `.env` 用于后端与 `docker-compose`。
 
-### 1. 根目录 `.env`
-
-用途：
-
-- 给 FastAPI 后端读取
-- 给 `docker-compose` 注入
-- 放 API key、ASR 凭证、后端运行参数
-
-第一次使用：
+首次使用：
 
 ```bash
 cp .env.example .env
@@ -84,15 +81,12 @@ Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-示例内容：
+推荐配置：
 
 ```bash
 DASHSCOPE_API_KEY=your-dashscope-api-key
 DASHSCOPE_MODEL=qwen-plus
-
-ALIYUN_ASR_APP_KEY=your-aliyun-asr-app-key
-ALIYUN_ACCESS_KEY_ID=your-aliyun-access-key-id
-ALIYUN_ACCESS_KEY_SECRET=your-aliyun-access-key-secret
+DASHSCOPE_ASR_MODEL=paraformer-realtime-v1
 
 PORT=8080
 LOG_LEVEL=INFO
@@ -102,50 +96,24 @@ AUDIO_SAMPLE_RATE=16000
 AUDIO_CHANNELS=1
 ```
 
-这些配置推荐直接写在根目录 `.env` 中；如果你更习惯用系统环境变量注入，也可以使用 `export` 的方式设置。
+关键变量说明：
 
-#### 1. 阿里云 DashScope API Key
+- `DASHSCOPE_API_KEY`: 百炼 API Key，同时用于实时 ASR 和总结
+- `DASHSCOPE_MODEL`: 文本总结模型，例如 `qwen-plus-2025-01-25`
+- `DASHSCOPE_ASR_MODEL`: 实时 ASR 模型，当前推荐 `paraformer-realtime-v1`
+- `SUMMARY_INTERVAL`: 每累计多少条 transcript 触发一次中途 summary
+- `FFMPEG_BINARY`: `ffmpeg` 可执行文件路径；如果系统 PATH 已配置，可保持为 `ffmpeg`
+- `AUDIO_SAMPLE_RATE`: 当前默认 `16000`
+- `AUDIO_CHANNELS`: 当前默认 `1`
 
-用于 LLM 总结功能：
+可选高级变量：
 
-1. 访问 [阿里云百炼平台](https://dashscope.aliyun.com/)
-2. 注册并获取 API Key
-3. 将 `DASHSCOPE_API_KEY` 写入根目录 `.env`，或者直接设置环境变量：
+- `DASHSCOPE_ASR_WS_URL`: DashScope ASR WebSocket 地址
+- `DASHSCOPE_WORKSPACE_ID`: 指定 DashScope workspace 时使用
 
-```bash
-export DASHSCOPE_API_KEY=your-dashscope-api-key
-```
+### 前端环境变量
 
-#### 2. 阿里云语音识别配置
-
-用于语音转文字和说话人分离：
-
-1. 访问 [阿里云智能语音交互](https://nls-portal.console.aliyun.com/)
-2. 开通录音文件识别服务
-3. 获取 `AppKey`、`AccessKeyId` 和 `AccessKeySecret`
-4. 将这些配置写入根目录 `.env`，或者直接设置环境变量：
-
-```bash
-export ALIYUN_ASR_APP_KEY=your-app-key
-export ALIYUN_ACCESS_KEY_ID=your-access-key-id
-export ALIYUN_ACCESS_KEY_SECRET=your-access-key-secret
-```
-
-后端会按这个顺序读取配置：
-
-1. 项目根目录 `.env`
-2. `backend/.env`
-3. 系统环境变量
-
-### 2. 前端 `frontend/.env.local`
-
-用途：
-
-- 只给前端使用
-- 只控制前端连接哪个后端
-- 不放任何 API key 或后端密钥
-
-第一次需要自定义前端连接地址时：
+如果前端需要连接非默认后端地址，可在 `frontend/.env.local` 中配置：
 
 ```bash
 cp frontend/.env.example frontend/.env.local
@@ -157,46 +125,12 @@ Windows PowerShell:
 Copy-Item frontend/.env.example frontend/.env.local
 ```
 
-可配置项：
+示例：
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8080
 VITE_WS_BASE_URL=ws://localhost:8080
 ```
-
-说明：
-
-- `VITE_API_BASE_URL` 用于 Vite 开发代理
-- `VITE_WS_BASE_URL` 用于前端 WebSocket 直连地址
-- 不配置时，开发环境默认连 `localhost:8080`
-- 不配置时，生产环境按当前页面 host 推导
-
-## 最常见的使用方式
-
-### 场景 1：本机开发，前后端都在本机
-
-只需要配置根目录 `.env`。
-
-前端不用额外建 `.env.local`，会默认连接 `localhost:8080`。
-
-### 场景 2：前端本机跑，后端在远程机器
-
-除了根目录 `.env` 之外，再新增：
-
-- `frontend/.env.local`
-
-把前端地址改成远程后端，例如：
-
-```bash
-VITE_API_BASE_URL=http://192.168.1.10:8080
-VITE_WS_BASE_URL=ws://192.168.1.10:8080
-```
-
-### 场景 3：Docker 启动
-
-只需要根目录 `.env`。
-
-`docker-compose` 会直接读取它。
 
 ## 本地开发
 
@@ -236,7 +170,7 @@ npm run dev
 
 - `http://localhost:3000`
 
-开发态下前端默认连接：
+开发环境下前端默认连接：
 
 - `ws://localhost:8080/ws/meeting`
 
@@ -260,6 +194,11 @@ docker-compose up --build
 - `POST /api/transcribe`
 - `POST /api/transcribe/batch`
 
+说明：
+
+- `/api/transcribe` 和 `/api/transcribe/batch` 仍会通过 `ffmpeg` 将上传音频转换为标准 `wav`
+- 转写后仍统一走 DashScope ASR
+
 ### WebSocket
 
 连接地址：
@@ -269,7 +208,7 @@ ws://localhost:8080/ws/meeting?scene=finance
 ws://localhost:8080/ws/meeting?scene=hr
 ```
 
-后端输出消息格式：
+后端推送消息：
 
 ```json
 {
@@ -311,16 +250,16 @@ ws://localhost:8080/ws/meeting?scene=hr
 
 行为约定：
 
-- 录音期间前端持续发送二进制音频块
+- 录音期间前端持续发送 PCM 音频二进制帧
 - 停止录音时先发送 `finalize`
-- 后端处理剩余音频并返回最终 `summary`
-- 最终 `summary` 发送完成后，后端主动关闭连接
+- 后端结束实时 ASR，会返回最终 `summary`
+- 最终 `summary` 发送完成后，后端主动关闭 WebSocket
 
 ## 会议场景
 
 ### finance
 
-- 财务对账
+- 财务会议
 - 待办事项提取
 - 决策点提取
 - 风险项提取
@@ -332,13 +271,11 @@ ws://localhost:8080/ws/meeting?scene=hr
 - 面试结论提取
 - 风险项提取
 
-## 注意事项
+## 当前限制
 
-- 根目录 `.env` 已加入 `.gitignore`，不会提交到仓库
-- 前端 `.env.local` 也已忽略，不会提交到仓库
-- `.env.example` 和 `frontend/.env.example` 都只放模板，不要写真实密钥
-- 当前 `speaker` 仍是占位逻辑，不是真正的 diarization
-- 阿里云 ASR token 逻辑已抽象，但仍建议后续补正式 token / STS 方案
+- `speaker` 仍然是占位逻辑，不是真正的 diarization
+- 实时 ASR 对术语和英文单词仍可能出现误识别
+- Summary 会结合模型输出和简单规则补全，但仍不是完整的会议纪要系统
 
 ## License
 
