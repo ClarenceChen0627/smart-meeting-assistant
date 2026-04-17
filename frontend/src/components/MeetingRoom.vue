@@ -28,6 +28,7 @@
       </div>
 
       <p v-if="isFinalizing" class="finalizing-hint">Generating final summary...</p>
+      <p v-if="serverError" class="error-hint">{{ serverError }}</p>
 
       <div class="summary-section" v-if="summary">
         <h3>Meeting Summary</h3>
@@ -49,6 +50,9 @@
             <ul>
               <li v-for="(risk, idx) in summary.risks" :key="idx">{{ risk }}</li>
             </ul>
+          </div>
+          <div v-if="!hasSummaryContent" class="summary-empty">
+            No actionable items were extracted from this meeting.
           </div>
         </div>
       </div>
@@ -97,9 +101,12 @@ import { VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useWebSocket } from '@/composables/useWebSocket'
 import type { MeetingSummary, TranscriptItem } from '@/types'
 
+const TARGET_SAMPLE_RATE = 16000
+
 const selectedScene = ref<'finance' | 'hr'>('finance')
 const isRecording = ref(false)
 const isFinalizing = ref(false)
+const serverError = ref('')
 const transcripts = ref<TranscriptItem[]>([])
 const summary = ref<MeetingSummary | null>(null)
 const transcriptList = ref<HTMLElement>()
@@ -115,6 +122,9 @@ const statusText = computed(() => {
 })
 
 const statusActive = computed(() => isRecording.value || isFinalizing.value)
+const hasSummaryContent = computed(() =>
+  Boolean(summary.value?.todos?.length || summary.value?.decisions?.length || summary.value?.risks?.length)
+)
 
 const buttonText = computed(() => {
   if (isFinalizing.value) {
@@ -136,12 +146,16 @@ const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
     summary.value = data
   },
   onError: (message: string) => {
+    serverError.value = message
     console.error('WebSocket server error:', message)
   }
 })
 
-let mediaRecorder: MediaRecorder | null = null
 let audioStream: MediaStream | null = null
+let audioContext: AudioContext | null = null
+let audioSourceNode: MediaStreamAudioSourceNode | null = null
+let processorNode: ScriptProcessorNode | null = null
+let silentGainNode: GainNode | null = null
 
 const buildWebSocketUrl = (scene: 'finance' | 'hr'): string => {
   const configuredBaseUrl = import.meta.env.VITE_WS_BASE_URL?.trim()
@@ -173,45 +187,58 @@ const toggleRecording = async () => {
 
 const startRecording = async () => {
   try {
-    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        sampleRate: TARGET_SAMPLE_RATE,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    })
     const wsUrl = buildWebSocketUrl(selectedScene.value)
 
     await connect(wsUrl)
 
-    mediaRecorder = new MediaRecorder(audioStream, {
-      mimeType: 'audio/webm;codecs=opus',
-      audioBitsPerSecond: 16000
-    })
+    audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE })
+    await audioContext.resume()
 
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0 && isConnected.value) {
-        sendAudio(event.data)
+    audioSourceNode = audioContext.createMediaStreamSource(audioStream)
+    processorNode = audioContext.createScriptProcessor(2048, 1, 1)
+    silentGainNode = audioContext.createGain()
+    silentGainNode.gain.value = 0
+
+    processorNode.onaudioprocess = (event) => {
+      if (!isConnected.value) {
+        return
       }
+      const inputData = event.inputBuffer.getChannelData(0)
+      const normalizedChunk = downsampleAudio(
+        inputData,
+        event.inputBuffer.sampleRate,
+        TARGET_SAMPLE_RATE
+      )
+      sendAudio(encodePcm16Chunk(normalizedChunk))
     }
 
-    mediaRecorder.start(3000)
+    audioSourceNode.connect(processorNode)
+    processorNode.connect(silentGainNode)
+    silentGainNode.connect(audioContext.destination)
+
     isRecording.value = true
     isFinalizing.value = false
+    serverError.value = ''
     transcripts.value = []
     summary.value = null
   } catch (error) {
     console.error('Failed to start recording:', error)
-    cleanupLocalAudio()
+    await cleanupLocalAudio()
     disconnect()
   }
 }
 
 const stopRecording = async () => {
-  const recorder = mediaRecorder
-  if (recorder && recorder.state !== 'inactive') {
-    await new Promise<void>((resolve) => {
-      recorder.addEventListener('stop', () => resolve(), { once: true })
-      recorder.stop()
-    })
-  }
-
-  mediaRecorder = null
-  cleanupLocalAudio()
+  await cleanupLocalAudio()
   isRecording.value = false
 
   if (!isConnected.value) {
@@ -230,7 +257,74 @@ const stopRecording = async () => {
   }
 }
 
-const cleanupLocalAudio = () => {
+const encodePcm16Chunk = (inputData: Float32Array): ArrayBuffer => {
+  const buffer = new ArrayBuffer(inputData.length * 2)
+  const view = new DataView(buffer)
+
+  for (let index = 0; index < inputData.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, inputData[index]))
+    const normalized = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+    view.setInt16(index * 2, normalized, true)
+  }
+
+  return buffer
+}
+
+const downsampleAudio = (
+  inputData: Float32Array,
+  sourceSampleRate: number,
+  targetSampleRate: number
+): Float32Array => {
+  if (sourceSampleRate === targetSampleRate) {
+    return inputData
+  }
+
+  const sampleRateRatio = sourceSampleRate / targetSampleRate
+  const outputLength = Math.round(inputData.length / sampleRateRatio)
+  const output = new Float32Array(outputLength)
+  let outputIndex = 0
+  let inputIndex = 0
+
+  while (outputIndex < outputLength) {
+    const nextInputIndex = Math.round((outputIndex + 1) * sampleRateRatio)
+    let accumulator = 0
+    let count = 0
+
+    for (let index = inputIndex; index < nextInputIndex && index < inputData.length; index += 1) {
+      accumulator += inputData[index]
+      count += 1
+    }
+
+    output[outputIndex] = count > 0 ? accumulator / count : 0
+    outputIndex += 1
+    inputIndex = nextInputIndex
+  }
+
+  return output
+}
+
+const cleanupLocalAudio = async () => {
+  if (processorNode) {
+    processorNode.disconnect()
+    processorNode.onaudioprocess = null
+    processorNode = null
+  }
+
+  if (audioSourceNode) {
+    audioSourceNode.disconnect()
+    audioSourceNode = null
+  }
+
+  if (silentGainNode) {
+    silentGainNode.disconnect()
+    silentGainNode = null
+  }
+
+  if (audioContext) {
+    await audioContext.close()
+    audioContext = null
+  }
+
   if (audioStream) {
     audioStream.getTracks().forEach((track) => track.stop())
     audioStream = null
@@ -244,11 +338,7 @@ const formatTime = (seconds: number): string => {
 }
 
 onUnmounted(() => {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
-  }
-  mediaRecorder = null
-  cleanupLocalAudio()
+  void cleanupLocalAudio()
   disconnect()
 })
 </script>
@@ -301,6 +391,16 @@ onUnmounted(() => {
   text-align: center;
 }
 
+.error-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background-color: rgba(205, 92, 92, 0.12);
+  color: #d96c54;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .summary-section {
   flex: 1;
   overflow-y: auto;
@@ -328,6 +428,15 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--color-text-secondary);
   border-bottom: 1px solid var(--color-border);
+}
+
+.summary-empty {
+  padding: 14px 16px;
+  border-radius: 8px;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .main-content {

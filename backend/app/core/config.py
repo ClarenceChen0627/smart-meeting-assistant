@@ -37,12 +37,18 @@ class Settings:
     audio_channels: int = int(os.getenv("AUDIO_CHANNELS", "1"))
 
     aliyun_asr_app_key: str = os.getenv("ALIYUN_ASR_APP_KEY", "")
+    aliyun_nls_token: str = os.getenv("ALIYUN_NLS_TOKEN", "")
     aliyun_access_key_id: str = os.getenv("ALIYUN_ACCESS_KEY_ID", "")
     aliyun_access_key_secret: str = os.getenv("ALIYUN_ACCESS_KEY_SECRET", "")
     aliyun_asr_url: str = os.getenv(
         "ALIYUN_ASR_URL",
         "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/FlashRecognizer",
     )
+    aliyun_token_url: str = os.getenv(
+        "ALIYUN_TOKEN_URL",
+        "https://nls-meta.cn-shanghai.aliyuncs.com/",
+    )
+    aliyun_region_id: str = os.getenv("ALIYUN_REGION_ID", "cn-shanghai")
 
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     dashscope_model: str = os.getenv("DASHSCOPE_MODEL", "qwen-plus")
@@ -50,14 +56,16 @@ class Settings:
         "DASHSCOPE_CHAT_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     )
+    dashscope_asr_model: str = os.getenv("DASHSCOPE_ASR_MODEL", "paraformer-realtime-v1")
+    dashscope_asr_ws_url: str = os.getenv(
+        "DASHSCOPE_ASR_WS_URL",
+        "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+    )
+    dashscope_workspace_id: str = os.getenv("DASHSCOPE_WORKSPACE_ID", "")
 
     @property
     def asr_configured(self) -> bool:
-        return bool(
-            self.aliyun_asr_app_key
-            and self.aliyun_access_key_id
-            and self.aliyun_access_key_secret
-        )
+        return bool(self.dashscope_api_key and self.dashscope_asr_model)
 
     @property
     def llm_configured(self) -> bool:

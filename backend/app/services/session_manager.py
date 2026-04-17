@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
-from app.clients.aliyun_asr_client import AliyunASRClient
+from app.clients.dashscope_asr_client import DashScopeASRClient, DashScopeASRStream
 from app.core.config import Settings
 from app.schemas.transcript import TranscriptItem
 from app.schemas.ws_message import WebSocketMessage, WebSocketMessageType
@@ -28,8 +28,12 @@ class MeetingSession:
     transcripts: list[TranscriptItem] = field(default_factory=list)
     transcript_count: int = 0
     finalizing: bool = False
+    transcription_blocked: bool = False
+    last_error_message: str | None = None
+    last_summary_transcript_count: int = 0
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_task: asyncio.Task[None] | None = None
+    asr_stream: DashScopeASRStream | None = None
 
 
 class SessionManager:
@@ -37,14 +41,13 @@ class SessionManager:
         self,
         *,
         settings: Settings,
-        asr_client: AliyunASRClient,
+        asr_client: DashScopeASRClient,
         audio_codec_service: AudioCodecService,
         speaker_service: SpeakerService,
         summary_service: SummaryService,
     ) -> None:
         self._settings = settings
         self._asr_client = asr_client
-        self._audio_codec_service = audio_codec_service
         self._speaker_service = speaker_service
         self._summary_service = summary_service
         self._sessions: dict[str, MeetingSession] = {}
@@ -81,41 +84,87 @@ class SessionManager:
                 await session.worker_task
             except asyncio.CancelledError:
                 pass
+        if session.asr_stream is not None:
+            await session.asr_stream.aclose()
+            session.asr_stream = None
 
     async def send_error(self, session: MeetingSession, message: str) -> None:
         await self._send_error(session, message)
 
     async def _consume_audio(self, session: MeetingSession) -> None:
+        if not self._asr_client.is_configured:
+            await self._send_error_once(
+                session,
+                "DashScope ASR is not configured. Set DASHSCOPE_API_KEY and DASHSCOPE_ASR_MODEL.",
+            )
+            session.transcription_blocked = True
+
+        if not session.transcription_blocked:
+            await self._start_asr_stream(session)
+
         try:
             while True:
                 payload = await session.audio_queue.get()
                 if payload is None:
                     break
 
-                try:
-                    wav_audio = await self._audio_codec_service.convert_browser_chunk_to_wav(payload)
-                    segments = await self._asr_client.transcribe_wav(wav_audio)
-                except (RuntimeError, ValueError) as exc:
-                    logger.error("Audio processing failed for %s: %s", session.session_id, exc)
-                    await self._send_error(session, str(exc))
+                if session.transcription_blocked or session.asr_stream is None:
                     continue
 
-                for segment in segments:
-                    transcript = self._speaker_service.assign_speaker(
-                        segment,
-                        transcript_index=session.transcript_count,
-                    )
-                    session.transcripts.append(transcript)
-                    session.transcript_count += 1
-                    await self._send_transcript(session, transcript)
-                    if session.transcript_count % self._settings.summary_interval == 0:
-                        await self._send_summary(session)
+                try:
+                    await session.asr_stream.send_audio(payload)
+                except RuntimeError as exc:
+                    logger.exception("Streaming audio failed for %s", session.session_id)
+                    await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
+                    continue
 
             if session.finalizing:
+                if session.asr_stream is not None and not session.transcription_blocked:
+                    try:
+                        await session.asr_stream.finish()
+                    except RuntimeError as exc:
+                        logger.exception("Finalizing ASR stream failed for %s", session.session_id)
+                        await self._handle_asr_error(
+                            session,
+                            str(exc).strip() or exc.__class__.__name__,
+                        )
                 await self._send_summary(session)
+                await asyncio.sleep(0.05)
                 await self._close_socket(session, code=1000, reason="finalized")
         except asyncio.CancelledError:
             raise
+
+    async def _start_asr_stream(self, session: MeetingSession) -> None:
+        try:
+            session.asr_stream = self._asr_client.create_pcm_stream(
+                on_segment=lambda segment: self._handle_segment(session, segment),
+                on_error=lambda message: self._handle_asr_error(session, message),
+            )
+            await session.asr_stream.start()
+        except RuntimeError as exc:
+            logger.exception("Starting ASR stream failed for %s", session.session_id)
+            await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
+
+    async def _handle_segment(self, session: MeetingSession, segment) -> None:
+        transcript = self._speaker_service.assign_speaker(
+            segment,
+            transcript_index=session.transcript_count,
+        )
+        session.transcripts.append(transcript)
+        session.transcript_count += 1
+        await self._send_transcript(session, transcript)
+        if session.transcript_count % self._settings.summary_interval == 0:
+            await self._send_summary(session)
+
+    async def _handle_asr_error(self, session: MeetingSession, message: str) -> None:
+        session.transcription_blocked = True
+        await self._send_error_once(session, message)
+
+    async def _send_error_once(self, session: MeetingSession, message: str) -> None:
+        if session.last_error_message == message:
+            return
+        session.last_error_message = message
+        await self._send_error(session, message)
 
     async def _send_transcript(
         self,
@@ -130,7 +179,11 @@ class SessionManager:
             ),
         )
 
-    async def _send_summary(self, session: MeetingSession) -> None:
+    async def _send_summary(self, session: MeetingSession, *, force: bool = False) -> None:
+        if not session.transcripts:
+            return
+        if not force and session.last_summary_transcript_count == session.transcript_count:
+            return
         if not self._summary_service.is_configured:
             await self._send_error(session, "DashScope is not configured; summary is empty.")
         summary = await self._summary_service.generate_summary(session.transcripts, session.scene)
@@ -141,6 +194,7 @@ class SessionManager:
                 data=summary.model_dump(),
             ),
         )
+        session.last_summary_transcript_count = session.transcript_count
 
     async def _send_error(self, session: MeetingSession, message: str) -> None:
         await self._send_message(

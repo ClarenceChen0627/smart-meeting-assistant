@@ -93,9 +93,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
     isConnected.value = false
   }
 
-  const sendAudio = (audioBlob: Blob) => {
+  const sendAudio = (audioChunk: ArrayBuffer) => {
     if (ws.value && isConnected.value && ws.value.readyState === WebSocket.OPEN) {
-      ws.value.send(audioBlob)
+      ws.value.send(audioChunk)
       return
     }
     console.warn('WebSocket is not connected; audio chunk skipped.')

@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from app.api.health import router as health_router
 from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
-from app.clients.aliyun_asr_client import AliyunASRClient
+from app.clients.dashscope_asr_client import DashScopeASRClient
 from app.clients.dashscope_client import DashScopeClient
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -27,7 +27,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asr_client = AliyunASRClient(settings)
+    asr_client = DashScopeASRClient(settings)
     dashscope_client = DashScopeClient(settings)
     audio_codec_service = AudioCodecService(settings)
     speaker_service = SpeakerService()
@@ -47,6 +47,16 @@ async def lifespan(app: FastAPI):
     app.state.speaker_service = speaker_service
     app.state.summary_service = summary_service
     app.state.session_manager = session_manager
+
+    try:
+        ffmpeg_binary = audio_codec_service.resolve_ffmpeg_binary()
+        logger.info("Using ffmpeg binary: %s", ffmpeg_binary)
+    except RuntimeError as exc:
+        logger.warning("%s", exc)
+    if asr_client.is_configured:
+        logger.info("Using DashScope ASR model: %s", settings.dashscope_asr_model)
+    else:
+        logger.warning("DashScope ASR is not configured.")
 
     logger.info("Starting %s %s", settings.service_name, settings.service_version)
     yield

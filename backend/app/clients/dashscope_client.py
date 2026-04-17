@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -31,27 +32,37 @@ class DashScopeClient:
         if not self.is_configured:
             raise RuntimeError("DASHSCOPE_API_KEY is not configured.")
 
-        response = await self._client.post(
-            self._settings.dashscope_chat_url,
-            headers={
-                "Authorization": f"Bearer {self._settings.dashscope_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self._settings.dashscope_model,
-                "temperature": 0.1,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-        )
+        try:
+            response = await self._client.post(
+                self._settings.dashscope_chat_url,
+                headers={
+                    "Authorization": f"Bearer {self._settings.dashscope_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._settings.dashscope_model,
+                    "temperature": 0.1,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"DashScope request failed: {str(exc).strip() or exc.__class__.__name__}"
+            ) from exc
         if response.status_code != 200:
             raise RuntimeError(
                 f"DashScope request failed with status {response.status_code}: {response.text}"
             )
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"DashScope returned non-JSON response: {response.text.strip() or '<empty response>'}"
+            ) from exc
         choices = payload.get("choices", [])
         if not choices:
             raise RuntimeError("DashScope returned no choices.")
