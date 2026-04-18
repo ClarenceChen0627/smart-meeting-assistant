@@ -16,6 +16,7 @@ from app.clients.dashscope_client import DashScopeClient
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.audio_codec_service import AudioCodecService
+from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     audio_codec_service = AudioCodecService(settings)
     speaker_service = SpeakerService()
     summary_service = SummaryService(dashscope_client)
+    sentiment_analysis_service = SentimentAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
     session_manager = SessionManager(
         settings=settings,
@@ -40,6 +42,7 @@ async def lifespan(app: FastAPI):
         audio_codec_service=audio_codec_service,
         speaker_service=speaker_service,
         summary_service=summary_service,
+        sentiment_analysis_service=sentiment_analysis_service,
         translation_service=translation_service,
     )
 
@@ -49,6 +52,7 @@ async def lifespan(app: FastAPI):
     app.state.audio_codec_service = audio_codec_service
     app.state.speaker_service = speaker_service
     app.state.summary_service = summary_service
+    app.state.sentiment_analysis_service = sentiment_analysis_service
     app.state.translation_service = translation_service
     app.state.session_manager = session_manager
 

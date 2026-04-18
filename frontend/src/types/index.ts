@@ -13,6 +13,32 @@ export interface TranscriptTranslation {
   text: string
 }
 
+export type MeetingSignalType = 'agreement' | 'disagreement' | 'tension' | 'hesitation'
+export type MeetingSentimentLevel = 'positive' | 'neutral' | 'negative' | 'mixed'
+export type MeetingEngagementLevel = 'low' | 'medium' | 'high'
+
+export interface MeetingSignalCounts {
+  agreement: number
+  disagreement: number
+  tension: number
+  hesitation: number
+}
+
+export interface MeetingAnalysisHighlight {
+  transcript_index: number
+  signal: MeetingSignalType
+  severity: 'low' | 'medium' | 'high'
+  reason: string
+}
+
+export interface MeetingAnalysis {
+  overall_sentiment: MeetingSentimentLevel
+  engagement_level: MeetingEngagementLevel
+  engagement_summary: string
+  signal_counts: MeetingSignalCounts
+  highlights: MeetingAnalysisHighlight[]
+}
+
 export interface MeetingSummary {
   todos: string[]
   decisions: string[]
@@ -20,8 +46,8 @@ export interface MeetingSummary {
 }
 
 export interface WebSocketMessage {
-  type: 'transcript' | 'translation' | 'summary' | 'error'
-  data: TranscriptItem | TranscriptTranslation | MeetingSummary | string
+  type: 'transcript' | 'translation' | 'analysis' | 'summary' | 'error'
+  data: TranscriptItem | TranscriptTranslation | MeetingAnalysis | MeetingSummary | string
 }
 
 export interface WebSocketControlMessage {

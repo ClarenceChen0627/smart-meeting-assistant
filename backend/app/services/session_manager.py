@@ -10,10 +10,12 @@ from starlette.websockets import WebSocketState
 
 from app.clients.dashscope_asr_client import DashScopeASRClient, DashScopeASRStream
 from app.core.config import Settings
+from app.schemas.analysis import MeetingAnalysis
 from app.schemas.translation import TranscriptTranslation
 from app.schemas.transcript import TranscriptItem
 from app.schemas.ws_message import WebSocketMessage, WebSocketMessageType
 from app.services.audio_codec_service import AudioCodecService
+from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
@@ -35,6 +37,9 @@ class MeetingSession:
     transcription_blocked: bool = False
     last_error_message: str | None = None
     last_summary_transcript_count: int = 0
+    last_analysis_transcript_count: int = 0
+    latest_analysis: MeetingAnalysis = field(default_factory=MeetingAnalysis.empty)
+    analysis_in_progress: bool = False
     translated_transcript_indices: set[int] = field(default_factory=set)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_task: asyncio.Task[None] | None = None
@@ -51,12 +56,14 @@ class SessionManager:
         audio_codec_service: AudioCodecService,
         speaker_service: SpeakerService,
         summary_service: SummaryService,
+        sentiment_analysis_service: SentimentAnalysisService,
         translation_service: TranslationService,
     ) -> None:
         self._settings = settings
         self._asr_client = asr_client
         self._speaker_service = speaker_service
         self._summary_service = summary_service
+        self._sentiment_analysis_service = sentiment_analysis_service
         self._translation_service = translation_service
         self._sessions: dict[str, MeetingSession] = {}
 
@@ -163,6 +170,7 @@ class SessionManager:
                         )
                     finally:
                         session.translation_worker_task = None
+                await self._send_analysis(session, force=True)
                 await self._send_summary(session)
                 await asyncio.sleep(0.05)
                 await self._close_socket(session, code=1000, reason="finalized")
@@ -191,6 +199,8 @@ class SessionManager:
         await self._send_transcript(session, transcript)
         if session.translation_worker_task is not None and session.target_lang:
             await session.translation_queue.put((transcript_index, transcript.text))
+        if session.transcript_count % 3 == 0:
+            await self._send_analysis(session)
         if session.transcript_count % self._settings.summary_interval == 0:
             await self._send_summary(session)
 
@@ -286,6 +296,34 @@ class SessionManager:
             ),
         )
         session.last_summary_transcript_count = session.transcript_count
+
+    async def _send_analysis(self, session: MeetingSession, *, force: bool = False) -> None:
+        if not session.transcripts:
+            return
+        if session.analysis_in_progress:
+            return
+        if not force and session.last_analysis_transcript_count == session.transcript_count:
+            return
+        if not self._sentiment_analysis_service.is_configured:
+            return
+
+        session.analysis_in_progress = True
+        try:
+            analysis = await self._sentiment_analysis_service.analyze_meeting(
+                session.transcripts,
+                session.scene,
+            )
+            session.latest_analysis = analysis
+            await self._send_message(
+                session,
+                WebSocketMessage(
+                    type=WebSocketMessageType.ANALYSIS,
+                    data=analysis.model_dump(),
+                ),
+            )
+            session.last_analysis_transcript_count = session.transcript_count
+        finally:
+            session.analysis_in_progress = False
 
     async def _send_error(self, session: MeetingSession, message: str) -> None:
         await self._send_message(

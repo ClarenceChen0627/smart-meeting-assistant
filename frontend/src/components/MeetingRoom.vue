@@ -30,6 +30,34 @@
         </el-select>
       </div>
 
+      <div class="analysis-section">
+        <h3>Meeting Analysis</h3>
+        <div v-if="analysis" class="analysis-content">
+          <div class="analysis-item">
+            <h4>Overall Sentiment</h4>
+            <p>{{ formatOverallSentiment(analysis.overall_sentiment) }}</p>
+          </div>
+          <div class="analysis-item">
+            <h4>Engagement Level</h4>
+            <p>{{ formatEngagementLevel(analysis.engagement_level) }}</p>
+          </div>
+          <div class="analysis-item">
+            <h4>Engagement Summary</h4>
+            <p>{{ analysis.engagement_summary || 'Analysis pending...' }}</p>
+          </div>
+          <div class="analysis-item">
+            <h4>Signals</h4>
+            <ul>
+              <li>Agreement: {{ analysis.signal_counts.agreement }}</li>
+              <li>Disagreement: {{ analysis.signal_counts.disagreement }}</li>
+              <li>Tension: {{ analysis.signal_counts.tension }}</li>
+              <li>Hesitation: {{ analysis.signal_counts.hesitation }}</li>
+            </ul>
+          </div>
+        </div>
+        <div v-else class="analysis-empty">Analysis pending...</div>
+      </div>
+
       <div class="controls">
         <el-button
           :type="isRecording ? 'danger' : 'success'"
@@ -100,7 +128,7 @@
             v-for="(item, idx) in transcripts"
             :key="idx"
             class="transcript-item"
-            :class="`speaker-${item.speaker}`"
+            :class="[`speaker-${item.speaker}`, analysisHighlightClass(item.analysisSignal)]"
           >
             <div class="speaker-badge">{{ item.speaker }}</div>
             <div class="transcript-content">
@@ -108,6 +136,10 @@
               <div v-if="item.translatedText" class="transcript-translation">
                 <span class="translation-label">{{ translationLabel(item.translatedTargetLang) }}</span>
                 <span>{{ item.translatedText }}</span>
+              </div>
+              <div v-if="item.analysisSignal" class="transcript-analysis">
+                <span class="analysis-tag">{{ formatSignalLabel(item.analysisSignal) }}</span>
+                <span>{{ item.analysisReason }}</span>
               </div>
             </div>
             <div class="transcript-time">{{ formatTime(item.start) }}</div>
@@ -123,6 +155,8 @@ import { computed, nextTick, onUnmounted, ref } from 'vue'
 import { VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useWebSocket } from '@/composables/useWebSocket'
 import type {
+  MeetingAnalysis,
+  MeetingSignalType,
   MeetingSummary,
   TranscriptItem,
   TranscriptTranslation,
@@ -139,6 +173,9 @@ const targetLanguageOptions: Array<{ label: string; value: TranslationTargetLang
 interface DisplayTranscriptItem extends TranscriptItem {
   translatedText?: string
   translatedTargetLang?: TranslationTargetLanguage
+  analysisSignal?: MeetingSignalType
+  analysisReason?: string
+  analysisSeverity?: 'low' | 'medium' | 'high'
 }
 
 const selectedScene = ref<'finance' | 'hr'>('finance')
@@ -147,6 +184,7 @@ const isRecording = ref(false)
 const isFinalizing = ref(false)
 const serverError = ref('')
 const transcripts = ref<DisplayTranscriptItem[]>([])
+const analysis = ref<MeetingAnalysis | null>(null)
 const summary = ref<MeetingSummary | null>(null)
 const transcriptList = ref<HTMLElement>()
 
@@ -192,6 +230,23 @@ const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
       if (transcriptList.value) {
         transcriptList.value.scrollTop = transcriptList.value.scrollHeight
       }
+    })
+  },
+  onAnalysis: (data: MeetingAnalysis) => {
+    analysis.value = data
+    transcripts.value.forEach((item) => {
+      item.analysisSignal = undefined
+      item.analysisReason = undefined
+      item.analysisSeverity = undefined
+    })
+    data.highlights.forEach((highlight) => {
+      const transcript = transcripts.value[highlight.transcript_index]
+      if (!transcript) {
+        return
+      }
+      transcript.analysisSignal = highlight.signal
+      transcript.analysisReason = highlight.reason
+      transcript.analysisSeverity = highlight.severity
     })
   },
   onSummary: (data: MeetingSummary) => {
@@ -285,6 +340,7 @@ const startRecording = async () => {
     isFinalizing.value = false
     serverError.value = ''
     transcripts.value = []
+    analysis.value = null
     summary.value = null
   } catch (error) {
     console.error('Failed to start recording:', error)
@@ -295,6 +351,39 @@ const startRecording = async () => {
 
 const translationLabel = (targetLanguage?: TranslationTargetLanguage): string => {
   return targetLanguageOptions.find((option) => option.value === targetLanguage)?.label ?? 'Translation'
+}
+
+const formatOverallSentiment = (value: MeetingAnalysis['overall_sentiment']): string => {
+  return {
+    positive: 'Positive',
+    neutral: 'Neutral',
+    negative: 'Negative',
+    mixed: 'Mixed'
+  }[value]
+}
+
+const formatEngagementLevel = (value: MeetingAnalysis['engagement_level']): string => {
+  return {
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High'
+  }[value]
+}
+
+const formatSignalLabel = (value: MeetingSignalType): string => {
+  return {
+    agreement: 'Agreement',
+    disagreement: 'Disagreement',
+    tension: 'Tension',
+    hesitation: 'Hesitation'
+  }[value]
+}
+
+const analysisHighlightClass = (signal?: MeetingSignalType): string | undefined => {
+  if (!signal) {
+    return undefined
+  }
+  return `analysis-${signal}`
 }
 
 const stopRecording = async () => {
@@ -428,6 +517,7 @@ onUnmounted(() => {
 
 .scene-selector h3,
 .translation-selector h3,
+.analysis-section h3,
 .summary-section h3 {
   font-size: 16px;
   margin-bottom: 12px;
@@ -442,6 +532,51 @@ onUnmounted(() => {
 
 .translation-select {
   width: 100%;
+}
+
+.analysis-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-item {
+  padding: 12px;
+  border-radius: 8px;
+  background-color: var(--color-bg-tertiary);
+}
+
+.analysis-item h4 {
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--color-accent-emerald);
+}
+
+.analysis-item p,
+.analysis-item li {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.analysis-item ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.analysis-empty {
+  padding: 12px;
+  border-radius: 8px;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
 }
 
 .controls {
@@ -593,6 +728,22 @@ onUnmounted(() => {
   border-left-color: var(--color-accent-emerald);
 }
 
+.transcript-item.analysis-agreement {
+  box-shadow: inset 0 0 0 1px rgba(46, 204, 113, 0.45);
+}
+
+.transcript-item.analysis-disagreement {
+  box-shadow: inset 0 0 0 1px rgba(231, 76, 60, 0.45);
+}
+
+.transcript-item.analysis-tension {
+  box-shadow: inset 0 0 0 1px rgba(243, 156, 18, 0.45);
+}
+
+.transcript-item.analysis-hesitation {
+  box-shadow: inset 0 0 0 1px rgba(241, 196, 15, 0.45);
+}
+
 .transcript-content {
   flex: 1;
   display: flex;
@@ -628,6 +779,26 @@ onUnmounted(() => {
   gap: 4px;
   color: var(--color-text-secondary);
   line-height: 1.6;
+}
+
+.transcript-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  font-size: 12px;
+}
+
+.analysis-tag {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .translation-label {

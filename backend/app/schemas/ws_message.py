@@ -9,6 +9,7 @@ from pydantic import BaseModel
 class WebSocketMessageType(str, Enum):
     TRANSCRIPT = "transcript"
     TRANSLATION = "translation"
+    ANALYSIS = "analysis"
     SUMMARY = "summary"
     ERROR = "error"
 
