@@ -44,6 +44,13 @@
         </el-button>
       </div>
 
+      <div class="diagnostics">
+        <h3>Session Status</h3>
+        <p class="diagnostic-line">{{ connectionStatus }}</p>
+        <p class="diagnostic-line">{{ audioStatus }}</p>
+        <p class="diagnostic-line diagnostic-error">{{ lastFailure }}</p>
+      </div>
+
       <p v-if="isFinalizing" class="finalizing-hint">Generating final summary...</p>
       <p v-if="serverError" class="error-hint">{{ serverError }}</p>
 
@@ -146,6 +153,9 @@ const selectedTargetLanguage = ref<TranslationTargetLanguage>('en')
 const isRecording = ref(false)
 const isFinalizing = ref(false)
 const serverError = ref('')
+const connectionStatus = ref('Realtime service is idle.')
+const audioStatus = ref('Microphone is idle.')
+const lastFailure = ref('Last failure: none.')
 const transcripts = ref<DisplayTranscriptItem[]>([])
 const summary = ref<MeetingSummary | null>(null)
 const transcriptList = ref<HTMLElement>()
@@ -199,7 +209,11 @@ const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
   },
   onError: (message: string) => {
     serverError.value = message
+    lastFailure.value = `Last failure: ${message}`
     console.error('WebSocket server error:', message)
+  },
+  onStatusChange: (message: string) => {
+    connectionStatus.value = message
   }
 })
 
@@ -241,8 +255,20 @@ const toggleRecording = async () => {
   await startRecording()
 }
 
+const formatClientError = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message || error.name
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+  return 'Unknown client-side error.'
+}
+
 const startRecording = async () => {
   try {
+    lastFailure.value = 'Last failure: none.'
+    audioStatus.value = 'Requesting microphone access...'
     audioStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -252,12 +278,28 @@ const startRecording = async () => {
         autoGainControl: true
       }
     })
+    audioStatus.value = 'Microphone access granted.'
+    audioStream.getTracks().forEach((track) => {
+      track.onended = () => {
+        audioStatus.value = 'Microphone stream ended.'
+      }
+      track.onmute = () => {
+        audioStatus.value = 'Microphone track muted.'
+      }
+      track.onunmute = () => {
+        audioStatus.value = 'Microphone track active.'
+      }
+    })
     const wsUrl = buildWebSocketUrl(selectedScene.value, selectedTargetLanguage.value)
 
     await connect(wsUrl)
 
     audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE })
     await audioContext.resume()
+    audioStatus.value = `Audio engine running (${audioContext.state}).`
+    audioContext.onstatechange = () => {
+      audioStatus.value = `Audio engine state: ${audioContext?.state ?? 'closed'}.`
+    }
 
     audioSourceNode = audioContext.createMediaStreamSource(audioStream)
     processorNode = audioContext.createScriptProcessor(2048, 1, 1)
@@ -284,12 +326,18 @@ const startRecording = async () => {
     isRecording.value = true
     isFinalizing.value = false
     serverError.value = ''
+    connectionStatus.value = 'Realtime service connected.'
     transcripts.value = []
     summary.value = null
   } catch (error) {
+    const errorMessage = formatClientError(error)
+    serverError.value = errorMessage
+    lastFailure.value = `Last failure: ${errorMessage}`
+    connectionStatus.value = 'Realtime startup failed.'
+    audioStatus.value = `Failed to start microphone or audio pipeline: ${errorMessage}`
     console.error('Failed to start recording:', error)
-    await cleanupLocalAudio()
-    disconnect()
+    await cleanupLocalAudio({ preserveStatusMessage: true })
+    disconnect({ preserveStatusMessage: true })
   }
 }
 
@@ -298,8 +346,10 @@ const translationLabel = (targetLanguage?: TranslationTargetLanguage): string =>
 }
 
 const stopRecording = async () => {
+  audioStatus.value = 'Stopping microphone...'
   await cleanupLocalAudio()
   isRecording.value = false
+  audioStatus.value = 'Microphone stopped.'
 
   if (!isConnected.value) {
     disconnect()
@@ -310,6 +360,9 @@ const stopRecording = async () => {
   try {
     await finalize()
   } catch (error) {
+    const errorMessage = formatClientError(error)
+    serverError.value = errorMessage
+    lastFailure.value = `Last failure: ${errorMessage}`
     console.error('Failed to finalize session:', error)
     disconnect()
   } finally {
@@ -363,7 +416,7 @@ const downsampleAudio = (
   return output
 }
 
-const cleanupLocalAudio = async () => {
+const cleanupLocalAudio = async (params?: { preserveStatusMessage?: boolean }) => {
   if (processorNode) {
     processorNode.disconnect()
     processorNode.onaudioprocess = null
@@ -383,11 +436,17 @@ const cleanupLocalAudio = async () => {
   if (audioContext) {
     await audioContext.close()
     audioContext = null
+    if (!params?.preserveStatusMessage) {
+      audioStatus.value = 'Audio engine closed.'
+    }
   }
 
   if (audioStream) {
     audioStream.getTracks().forEach((track) => track.stop())
     audioStream = null
+    if (!params?.preserveStatusMessage) {
+      audioStatus.value = 'Microphone tracks stopped.'
+    }
   }
 }
 
@@ -428,6 +487,7 @@ onUnmounted(() => {
 
 .scene-selector h3,
 .translation-selector h3,
+.diagnostics h3,
 .summary-section h3 {
   font-size: 16px;
   margin-bottom: 12px;
@@ -447,6 +507,28 @@ onUnmounted(() => {
 .controls {
   display: flex;
   justify-content: center;
+}
+
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnostic-line {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.diagnostic-error {
+  background-color: rgba(205, 92, 92, 0.12);
+  color: #d96c54;
 }
 
 .finalizing-hint {

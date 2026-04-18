@@ -12,6 +12,7 @@ interface UseWebSocketOptions {
   onTranslation: (data: TranscriptTranslation) => void
   onSummary: (data: MeetingSummary) => void
   onError?: (message: string) => void
+  onStatusChange?: (message: string) => void
 }
 
 export function useWebSocket(options: UseWebSocketOptions) {
@@ -28,12 +29,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const connect = (url: string): Promise<void> => {
     return new Promise((resolve, reject) => {
       try {
+        options.onStatusChange?.('Connecting to realtime service...')
         console.log('Connecting WebSocket:', url)
         const socket = new WebSocket(url)
         ws.value = socket
 
         socket.onopen = () => {
           isConnected.value = true
+          options.onStatusChange?.('Realtime service connected.')
           console.log('WebSocket connected')
           resolve()
         }
@@ -56,6 +59,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
 
         socket.onerror = (error) => {
+          options.onStatusChange?.('Realtime service reported a network error.')
           console.error('WebSocket error:', error)
         }
 
@@ -63,6 +67,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
           const wasConnected = isConnected.value
           isConnected.value = false
           ws.value = null
+          const closeMessage = `Realtime service disconnected (${event.code}${
+            event.reason ? `: ${event.reason}` : ''
+          }).`
+          options.onStatusChange?.(closeMessage)
           console.log('WebSocket closed:', event.code, event.reason)
 
           if (finalizeResolve || finalizeReject) {
@@ -79,13 +87,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
           }
         }
       } catch (error) {
+        options.onStatusChange?.('Failed to create realtime connection.')
         console.error('Failed to create WebSocket:', error)
         reject(error)
       }
     })
   }
 
-  const disconnect = () => {
+  const disconnect = (params?: { preserveStatusMessage?: boolean }) => {
     if (finalizeReject) {
       finalizeReject(new Error('WebSocket closed before finalize completed.'))
       clearFinalize()
@@ -95,6 +104,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.value = null
     }
     isConnected.value = false
+    if (!params?.preserveStatusMessage) {
+      options.onStatusChange?.('Realtime connection closed locally.')
+    }
   }
 
   const sendAudio = (audioChunk: ArrayBuffer) => {

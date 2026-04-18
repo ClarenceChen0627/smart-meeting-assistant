@@ -6,6 +6,13 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
   const apiBaseUrl = env.VITE_API_BASE_URL || 'http://localhost:8080'
   const wsBaseUrl = env.VITE_WS_BASE_URL || 'ws://localhost:8080'
+  const allowedHosts = [
+    'localhost',
+    '127.0.0.1',
+    '.run.pinggy-free.link',
+    '.loca.lt',
+    '.trycloudflare.com'
+  ]
 
   return {
     plugins: [vue()],
@@ -16,6 +23,8 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 3000,
+      host: '0.0.0.0',
+      allowedHosts,
       proxy: {
         '/api': {
           target: apiBaseUrl,
