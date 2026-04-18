@@ -14,8 +14,9 @@ router = APIRouter()
 async def meeting_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
     scene = websocket.query_params.get("scene", "finance")
+    target_lang = websocket.query_params.get("target_lang")
     manager = websocket.app.state.session_manager
-    session = await manager.create_session(websocket, scene)
+    session = await manager.create_session(websocket, scene, target_lang)
 
     try:
         while True:

@@ -13,6 +13,23 @@
         </el-radio-group>
       </div>
 
+      <div class="translation-selector">
+        <h3>Translation</h3>
+        <el-select
+          v-model="selectedTargetLanguage"
+          :disabled="isRecording || isFinalizing"
+          size="large"
+          class="translation-select"
+        >
+          <el-option
+            v-for="option in targetLanguageOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+      </div>
+
       <div class="controls">
         <el-button
           :type="isRecording ? 'danger' : 'success'"
@@ -86,7 +103,13 @@
             :class="`speaker-${item.speaker}`"
           >
             <div class="speaker-badge">{{ item.speaker }}</div>
-            <div class="transcript-text">{{ item.text }}</div>
+            <div class="transcript-content">
+              <div class="transcript-text">{{ item.text }}</div>
+              <div v-if="item.translatedText" class="transcript-translation">
+                <span class="translation-label">{{ translationLabel(item.translatedTargetLang) }}</span>
+                <span>{{ item.translatedText }}</span>
+              </div>
+            </div>
             <div class="transcript-time">{{ formatTime(item.start) }}</div>
           </div>
         </div>
@@ -99,15 +122,31 @@
 import { computed, nextTick, onUnmounted, ref } from 'vue'
 import { VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useWebSocket } from '@/composables/useWebSocket'
-import type { MeetingSummary, TranscriptItem } from '@/types'
+import type {
+  MeetingSummary,
+  TranscriptItem,
+  TranscriptTranslation,
+  TranslationTargetLanguage
+} from '@/types'
 
 const TARGET_SAMPLE_RATE = 16000
+const targetLanguageOptions: Array<{ label: string; value: TranslationTargetLanguage }> = [
+  { label: 'English', value: 'en' },
+  { label: 'Japanese', value: 'ja' },
+  { label: 'Korean', value: 'ko' }
+]
+
+interface DisplayTranscriptItem extends TranscriptItem {
+  translatedText?: string
+  translatedTargetLang?: TranslationTargetLanguage
+}
 
 const selectedScene = ref<'finance' | 'hr'>('finance')
+const selectedTargetLanguage = ref<TranslationTargetLanguage>('en')
 const isRecording = ref(false)
 const isFinalizing = ref(false)
 const serverError = ref('')
-const transcripts = ref<TranscriptItem[]>([])
+const transcripts = ref<DisplayTranscriptItem[]>([])
 const summary = ref<MeetingSummary | null>(null)
 const transcriptList = ref<HTMLElement>()
 
@@ -135,7 +174,20 @@ const buttonText = computed(() => {
 
 const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
   onTranscript: (data: TranscriptItem) => {
-    transcripts.value.push(data)
+    transcripts.value.push({ ...data })
+    nextTick(() => {
+      if (transcriptList.value) {
+        transcriptList.value.scrollTop = transcriptList.value.scrollHeight
+      }
+    })
+  },
+  onTranslation: (data: TranscriptTranslation) => {
+    const transcript = transcripts.value[data.transcript_index]
+    if (!transcript) {
+      return
+    }
+    transcript.translatedText = data.text
+    transcript.translatedTargetLang = data.target_lang
     nextTick(() => {
       if (transcriptList.value) {
         transcriptList.value.scrollTop = transcriptList.value.scrollHeight
@@ -157,17 +209,21 @@ let audioSourceNode: MediaStreamAudioSourceNode | null = null
 let processorNode: ScriptProcessorNode | null = null
 let silentGainNode: GainNode | null = null
 
-const buildWebSocketUrl = (scene: 'finance' | 'hr'): string => {
+const buildWebSocketUrl = (
+  scene: 'finance' | 'hr',
+  targetLanguage: TranslationTargetLanguage
+): string => {
   const configuredBaseUrl = import.meta.env.VITE_WS_BASE_URL?.trim()
+  const query = `scene=${encodeURIComponent(scene)}&target_lang=${encodeURIComponent(targetLanguage)}`
   if (configuredBaseUrl) {
     const normalizedBaseUrl = configuredBaseUrl.replace(/\/+$/, '')
-    return `${normalizedBaseUrl}/ws/meeting?scene=${scene}`
+    return `${normalizedBaseUrl}/ws/meeting?${query}`
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.hostname
   const port = import.meta.env.DEV ? '8080' : window.location.port
-  return `${protocol}//${host}:${port}/ws/meeting?scene=${scene}`
+  return `${protocol}//${host}:${port}/ws/meeting?${query}`
 }
 
 const handleSceneChange = (scene: string) => {
@@ -196,7 +252,7 @@ const startRecording = async () => {
         autoGainControl: true
       }
     })
-    const wsUrl = buildWebSocketUrl(selectedScene.value)
+    const wsUrl = buildWebSocketUrl(selectedScene.value, selectedTargetLanguage.value)
 
     await connect(wsUrl)
 
@@ -235,6 +291,10 @@ const startRecording = async () => {
     await cleanupLocalAudio()
     disconnect()
   }
+}
+
+const translationLabel = (targetLanguage?: TranslationTargetLanguage): string => {
+  return targetLanguageOptions.find((option) => option.value === targetLanguage)?.label ?? 'Translation'
 }
 
 const stopRecording = async () => {
@@ -367,6 +427,7 @@ onUnmounted(() => {
 }
 
 .scene-selector h3,
+.translation-selector h3,
 .summary-section h3 {
   font-size: 16px;
   margin-bottom: 12px;
@@ -377,6 +438,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.translation-select {
+  width: 100%;
 }
 
 .controls {
@@ -528,6 +593,13 @@ onUnmounted(() => {
   border-left-color: var(--color-accent-emerald);
 }
 
+.transcript-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .speaker-badge {
   width: 40px;
   height: 40px;
@@ -546,9 +618,24 @@ onUnmounted(() => {
 }
 
 .transcript-text {
-  flex: 1;
   color: var(--color-text-primary);
   line-height: 1.6;
+}
+
+.transcript-translation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.translation-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-accent-emerald);
 }
 
 .transcript-time {

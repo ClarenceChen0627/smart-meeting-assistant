@@ -10,11 +10,13 @@ from starlette.websockets import WebSocketState
 
 from app.clients.dashscope_asr_client import DashScopeASRClient, DashScopeASRStream
 from app.core.config import Settings
+from app.schemas.translation import TranscriptTranslation
 from app.schemas.transcript import TranscriptItem
 from app.schemas.ws_message import WebSocketMessage, WebSocketMessageType
 from app.services.audio_codec_service import AudioCodecService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
+from app.services.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +25,21 @@ logger = logging.getLogger(__name__)
 class MeetingSession:
     session_id: str
     scene: str
+    target_lang: str | None
     websocket: WebSocket
     audio_queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
+    translation_queue: asyncio.Queue[tuple[int, str] | None] = field(default_factory=asyncio.Queue)
     transcripts: list[TranscriptItem] = field(default_factory=list)
     transcript_count: int = 0
     finalizing: bool = False
     transcription_blocked: bool = False
     last_error_message: str | None = None
     last_summary_transcript_count: int = 0
+    translated_transcript_indices: set[int] = field(default_factory=set)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_task: asyncio.Task[None] | None = None
     asr_stream: DashScopeASRStream | None = None
+    translation_worker_task: asyncio.Task[None] | None = None
 
 
 class SessionManager:
@@ -45,20 +51,31 @@ class SessionManager:
         audio_codec_service: AudioCodecService,
         speaker_service: SpeakerService,
         summary_service: SummaryService,
+        translation_service: TranslationService,
     ) -> None:
         self._settings = settings
         self._asr_client = asr_client
         self._speaker_service = speaker_service
         self._summary_service = summary_service
+        self._translation_service = translation_service
         self._sessions: dict[str, MeetingSession] = {}
 
-    async def create_session(self, websocket: WebSocket, scene: str) -> MeetingSession:
+    async def create_session(
+        self,
+        websocket: WebSocket,
+        scene: str,
+        target_lang: str | None,
+    ) -> MeetingSession:
+        normalized_target_lang = self._translation_service.normalize_target_lang(target_lang)
         session = MeetingSession(
             session_id=uuid4().hex,
             scene=scene,
+            target_lang=normalized_target_lang,
             websocket=websocket,
         )
         session.worker_task = asyncio.create_task(self._consume_audio(session))
+        if normalized_target_lang and self._translation_service.is_configured:
+            session.translation_worker_task = asyncio.create_task(self._consume_translations(session))
         self._sessions[session.session_id] = session
         return session
 
@@ -82,6 +99,12 @@ class SessionManager:
             session.worker_task.cancel()
             try:
                 await session.worker_task
+            except asyncio.CancelledError:
+                pass
+        if session.translation_worker_task is not None and not session.translation_worker_task.done():
+            session.translation_worker_task.cancel()
+            try:
+                await session.translation_worker_task
             except asyncio.CancelledError:
                 pass
         if session.asr_stream is not None:
@@ -128,6 +151,18 @@ class SessionManager:
                             session,
                             str(exc).strip() or exc.__class__.__name__,
                         )
+                if session.translation_worker_task is not None:
+                    await session.translation_queue.put(None)
+                    try:
+                        await session.translation_worker_task
+                    except RuntimeError as exc:
+                        logger.exception("Waiting for translation worker failed for %s", session.session_id)
+                        await self._send_error_once(
+                            session,
+                            str(exc).strip() or exc.__class__.__name__,
+                        )
+                    finally:
+                        session.translation_worker_task = None
                 await self._send_summary(session)
                 await asyncio.sleep(0.05)
                 await self._close_socket(session, code=1000, reason="finalized")
@@ -152,13 +187,56 @@ class SessionManager:
         )
         session.transcripts.append(transcript)
         session.transcript_count += 1
+        transcript_index = session.transcript_count - 1
         await self._send_transcript(session, transcript)
+        if session.translation_worker_task is not None and session.target_lang:
+            await session.translation_queue.put((transcript_index, transcript.text))
         if session.transcript_count % self._settings.summary_interval == 0:
             await self._send_summary(session)
 
     async def _handle_asr_error(self, session: MeetingSession, message: str) -> None:
         session.transcription_blocked = True
         await self._send_error_once(session, message)
+
+    async def _consume_translations(self, session: MeetingSession) -> None:
+        while True:
+            item = await session.translation_queue.get()
+            if item is None:
+                break
+
+            transcript_index, text = item
+            if transcript_index in session.translated_transcript_indices:
+                continue
+            if not session.target_lang:
+                continue
+
+            try:
+                translated_text = await self._translation_service.translate_text(
+                    text=text,
+                    target_lang=session.target_lang,
+                )
+            except (RuntimeError, ValueError) as exc:
+                logger.warning(
+                    "Translation failed for %s transcript %s (%s): %s",
+                    session.session_id,
+                    transcript_index,
+                    session.target_lang,
+                    exc,
+                )
+                continue
+
+            if not translated_text:
+                continue
+
+            session.translated_transcript_indices.add(transcript_index)
+            await self._send_translation(
+                session,
+                TranscriptTranslation(
+                    transcript_index=transcript_index,
+                    target_lang=session.target_lang,
+                    text=translated_text,
+                ),
+            )
 
     async def _send_error_once(self, session: MeetingSession, message: str) -> None:
         if session.last_error_message == message:
@@ -176,6 +254,19 @@ class SessionManager:
             WebSocketMessage(
                 type=WebSocketMessageType.TRANSCRIPT,
                 data=transcript.model_dump(),
+            ),
+        )
+
+    async def _send_translation(
+        self,
+        session: MeetingSession,
+        translation: TranscriptTranslation,
+    ) -> None:
+        await self._send_message(
+            session,
+            WebSocketMessage(
+                type=WebSocketMessageType.TRANSLATION,
+                data=translation.model_dump(),
             ),
         )
 

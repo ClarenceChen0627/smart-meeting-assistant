@@ -52,6 +52,10 @@ class Settings:
 
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     dashscope_model: str = os.getenv("DASHSCOPE_MODEL", "qwen-plus")
+    dashscope_translation_model: str = os.getenv(
+        "DASHSCOPE_TRANSLATION_MODEL",
+        "qwen-mt-flash",
+    )
     dashscope_chat_url: str = os.getenv(
         "DASHSCOPE_CHAT_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",

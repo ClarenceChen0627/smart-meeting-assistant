@@ -5,6 +5,14 @@ export interface TranscriptItem {
   end: number
 }
 
+export type TranslationTargetLanguage = 'en' | 'ja' | 'ko'
+
+export interface TranscriptTranslation {
+  transcript_index: number
+  target_lang: TranslationTargetLanguage
+  text: string
+}
+
 export interface MeetingSummary {
   todos: string[]
   decisions: string[]
@@ -12,8 +20,8 @@ export interface MeetingSummary {
 }
 
 export interface WebSocketMessage {
-  type: 'transcript' | 'summary' | 'error'
-  data: TranscriptItem | MeetingSummary | string
+  type: 'transcript' | 'translation' | 'summary' | 'error'
+  data: TranscriptItem | TranscriptTranslation | MeetingSummary | string
 }
 
 export interface WebSocketControlMessage {

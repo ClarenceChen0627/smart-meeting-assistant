@@ -1,6 +1,6 @@
 # Smart Meeting Assistant
 
-实时会议助手，支持浏览器实时录音、实时转写、场景化总结，以及基于 WebSocket 的双向交互。
+实时会议助手，支持浏览器实时录音、实时转写、实时译文展示、场景化总结，以及基于 WebSocket 的双向交互。
 
 当前主架构：
 
@@ -42,6 +42,7 @@ smart-meeting-assistant/
 ### 外部能力
 
 - DashScope Paraformer Realtime ASR: 实时语音转写
+- DashScope Qwen-MT: transcript 文本翻译
 - DashScope / Qwen: 会议总结
 
 ## 当前工作流
@@ -50,8 +51,9 @@ smart-meeting-assistant/
 2. 前端将音频转换为 `16kHz / 单声道 / PCM16`，通过 WebSocket 发送到后端
 3. 后端将 PCM 音频流转发到 DashScope `paraformer-realtime-v1`
 4. 后端将转写结果实时推送为 `transcript`
-5. 后端按场景生成 `summary`
-6. 停止录音时，前端发送 `finalize`，后端返回最终 `summary` 后关闭连接
+5. 后端将 transcript 文本实时翻译为目标语言，并推送为 `translation`
+6. 后端按场景生成 `summary`
+7. 停止录音时，前端发送 `finalize`，后端返回最终 `summary` 后关闭连接
 
 说明：
 
@@ -87,6 +89,7 @@ Copy-Item .env.example .env
 DASHSCOPE_API_KEY=your-dashscope-api-key
 DASHSCOPE_MODEL=qwen-plus
 DASHSCOPE_ASR_MODEL=paraformer-realtime-v1
+DASHSCOPE_TRANSLATION_MODEL=qwen-mt-flash
 
 PORT=8080
 LOG_LEVEL=INFO
@@ -101,6 +104,7 @@ AUDIO_CHANNELS=1
 - `DASHSCOPE_API_KEY`: 百炼 API Key，同时用于实时 ASR 和总结
 - `DASHSCOPE_MODEL`: 文本总结模型，例如 `qwen-plus-2025-01-25`
 - `DASHSCOPE_ASR_MODEL`: 实时 ASR 模型，当前推荐 `paraformer-realtime-v1`
+- `DASHSCOPE_TRANSLATION_MODEL`: 文本翻译模型，当前默认 `qwen-mt-flash`
 - `SUMMARY_INTERVAL`: 每累计多少条 transcript 触发一次中途 summary
 - `FFMPEG_BINARY`: `ffmpeg` 可执行文件路径；如果系统 PATH 已配置，可保持为 `ffmpeg`
 - `AUDIO_SAMPLE_RATE`: 当前默认 `16000`
@@ -224,6 +228,17 @@ ws://localhost:8080/ws/meeting?scene=hr
 
 ```json
 {
+  "type": "translation",
+  "data": {
+    "transcript_index": 0,
+    "target_lang": "en",
+    "text": "Hello everyone."
+  }
+}
+```
+
+```json
+{
   "type": "summary",
   "data": {
     "todos": [],
@@ -251,6 +266,7 @@ ws://localhost:8080/ws/meeting?scene=hr
 行为约定：
 
 - 录音期间前端持续发送 PCM 音频二进制帧
+- 连接建立时可通过 `target_lang` 指定目标语言，当前支持 `en` / `ja` / `ko`
 - 停止录音时先发送 `finalize`
 - 后端结束实时 ASR，会返回最终 `summary`
 - 最终 `summary` 发送完成后，后端主动关闭 WebSocket

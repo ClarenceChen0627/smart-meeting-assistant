@@ -19,6 +19,7 @@ from app.services.audio_codec_service import AudioCodecService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
+from app.services.translation_service import TranslationService
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -32,12 +33,14 @@ async def lifespan(app: FastAPI):
     audio_codec_service = AudioCodecService(settings)
     speaker_service = SpeakerService()
     summary_service = SummaryService(dashscope_client)
+    translation_service = TranslationService(dashscope_client)
     session_manager = SessionManager(
         settings=settings,
         asr_client=asr_client,
         audio_codec_service=audio_codec_service,
         speaker_service=speaker_service,
         summary_service=summary_service,
+        translation_service=translation_service,
     )
 
     app.state.settings = settings
@@ -46,6 +49,7 @@ async def lifespan(app: FastAPI):
     app.state.audio_codec_service = audio_codec_service
     app.state.speaker_service = speaker_service
     app.state.summary_service = summary_service
+    app.state.translation_service = translation_service
     app.state.session_manager = session_manager
 
     try:
@@ -57,6 +61,8 @@ async def lifespan(app: FastAPI):
         logger.info("Using DashScope ASR model: %s", settings.dashscope_asr_model)
     else:
         logger.warning("DashScope ASR is not configured.")
+    if translation_service.is_configured:
+        logger.info("Using DashScope translation model: %s", settings.dashscope_translation_model)
 
     logger.info("Starting %s %s", settings.service_name, settings.service_version)
     yield

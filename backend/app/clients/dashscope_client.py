@@ -70,6 +70,58 @@ class DashScopeClient:
         content = choices[0].get("message", {}).get("content", "")
         return self._flatten_content(content)
 
+    async def translate_text(
+        self,
+        *,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+    ) -> str:
+        if not self.is_configured:
+            raise RuntimeError("DASHSCOPE_API_KEY is not configured.")
+        if not text.strip():
+            return ""
+
+        try:
+            response = await self._client.post(
+                self._settings.dashscope_chat_url,
+                headers={
+                    "Authorization": f"Bearer {self._settings.dashscope_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._settings.dashscope_translation_model,
+                    "messages": [{"role": "user", "content": text}],
+                    "translation_options": {
+                        "source_lang": source_lang,
+                        "target_lang": target_lang,
+                    },
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"DashScope translation request failed: {str(exc).strip() or exc.__class__.__name__}"
+            ) from exc
+        if response.status_code != 200:
+            raise RuntimeError(
+                "DashScope translation request failed with status "
+                f"{response.status_code}: {response.text}"
+            )
+
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "DashScope translation returned non-JSON response: "
+                f"{response.text.strip() or '<empty response>'}"
+            ) from exc
+        choices = payload.get("choices", [])
+        if not choices:
+            raise RuntimeError("DashScope translation returned no choices.")
+
+        content = choices[0].get("message", {}).get("content", "")
+        return self._flatten_content(content).strip()
+
     def _flatten_content(self, content: Any) -> str:
         if isinstance(content, str):
             return content

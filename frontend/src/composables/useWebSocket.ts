@@ -2,12 +2,14 @@ import { ref } from 'vue'
 import type {
   MeetingSummary,
   TranscriptItem,
+  TranscriptTranslation,
   WebSocketControlMessage,
   WebSocketMessage
 } from '@/types'
 
 interface UseWebSocketOptions {
   onTranscript: (data: TranscriptItem) => void
+  onTranslation: (data: TranscriptTranslation) => void
   onSummary: (data: MeetingSummary) => void
   onError?: (message: string) => void
 }
@@ -41,6 +43,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
             const message: WebSocketMessage = JSON.parse(event.data)
             if (message.type === 'transcript') {
               options.onTranscript(message.data as TranscriptItem)
+            } else if (message.type === 'translation') {
+              options.onTranslation(message.data as TranscriptTranslation)
             } else if (message.type === 'summary') {
               options.onSummary(message.data as MeetingSummary)
             } else if (message.type === 'error') {
