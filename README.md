@@ -1,26 +1,76 @@
 # Smart Meeting Assistant
 
-实时会议助手，支持浏览器实时录音、实时转写、实时译文展示、场景化总结，以及基于 WebSocket 的双向交互。
+Smart Meeting Assistant is a browser-based meeting copilot built with Vue 3 and FastAPI. It supports live speech transcription, live transcript translation, meeting summarization, action-item extraction, and meeting sentiment / engagement analysis over a WebSocket-based realtime workflow.
 
-当前主架构：
+## Architecture
 
 - `frontend`: Vue 3 + TypeScript + Vite
 - `backend`: FastAPI + Uvicorn
 
-## 项目结构
+## Features
+
+### Realtime pipeline
+
+- Browser microphone capture
+- Realtime ASR with DashScope Paraformer (`paraformer-realtime-v1`)
+- Realtime transcript rendering
+- Realtime transcript translation to one target language:
+  - English
+  - Japanese
+  - Korean
+
+### Meeting summary
+
+- Final summary after recording stops
+- Structured output:
+  - `todos`
+  - `decisions`
+  - `risks`
+
+### Meeting analysis
+
+- Incremental meeting sentiment / engagement analysis during the session
+- Final meeting analysis after `finalize`
+- Structured output:
+  - `overall_sentiment`
+  - `engagement_level`
+  - `engagement_summary`
+  - signal counts for:
+    - `agreement`
+    - `disagreement`
+    - `tension`
+    - `hesitation`
+- Transcript-level highlight markers for emotionally significant moments
+
+### Frontend UX
+
+- Resizable sidebar and transcript workspace on desktop
+- Scrollable transcript list
+- Bilingual transcript cards
+- Separate Meeting Summary and Meeting Analysis panels
+
+### Upload transcription
+
+- `POST /api/transcribe`
+- `POST /api/transcribe/batch`
+
+Uploaded audio is normalized with `ffmpeg` before being transcribed.
+
+## Project Structure
 
 ```text
 smart-meeting-assistant/
-├─ frontend/                  # Vue 3 前端
-├─ backend/                   # FastAPI 后端
-├─ .env.example               # 后端 / docker-compose 环境变量模板
+├─ frontend/
+├─ backend/
+├─ .env.example
 ├─ docker-compose.yml
+├─ FULL_FEATURE_TEST_SCRIPT.md
 └─ README.md
 ```
 
-## 技术栈
+## Tech Stack
 
-### 前端
+### Frontend
 
 - Vue 3
 - TypeScript
@@ -29,7 +79,7 @@ smart-meeting-assistant/
 - WebSocket
 - Web Audio API
 
-### 后端
+### Backend
 
 - FastAPI
 - Uvicorn
@@ -39,39 +89,33 @@ smart-meeting-assistant/
 - python-dotenv
 - ffmpeg
 
-### 外部能力
+### External services
 
-- DashScope Paraformer Realtime ASR: 实时语音转写
-- DashScope Qwen-MT: transcript 文本翻译
-- DashScope / Qwen: 会议总结
+- DashScope Paraformer Realtime ASR
+- DashScope Qwen-MT
+- DashScope / Qwen chat models
 
-## 当前工作流
+## Current Workflow
 
-1. 前端通过麦克风采集音频
-2. 前端将音频转换为 `16kHz / 单声道 / PCM16`，通过 WebSocket 发送到后端
-3. 后端将 PCM 音频流转发到 DashScope `paraformer-realtime-v1`
-4. 后端将转写结果实时推送为 `transcript`
-5. 后端将 transcript 文本实时翻译为目标语言，并推送为 `translation`
-6. 后端按场景生成 `summary`
-7. 停止录音时，前端发送 `finalize`，后端返回最终 `summary` 后关闭连接
+1. The browser captures microphone audio.
+2. The frontend converts audio into PCM frames and streams them to the backend over WebSocket.
+3. The backend forwards audio to DashScope realtime ASR.
+4. The backend emits `transcript` messages.
+5. The backend translates transcript text and emits `translation` messages.
+6. The backend periodically analyzes emotional dynamics and emits `analysis` messages.
+7. When recording stops, the frontend sends `finalize`.
+8. The backend finishes ASR, sends the final `analysis`, sends the final `summary`, then closes the socket.
 
-说明：
-
-- 当前会议实时转写不再使用阿里云 NLS `FlashRecognizer`
-- `ffmpeg` 现在主要用于 `/api/transcribe` 上传文件接口的音频转码
-
-## 运行要求
+## Requirements
 
 - Node.js 18+
 - Python 3.10+
 - ffmpeg
-- 可用的 DashScope API Key
+- A valid DashScope API key
 
-## 环境变量
+## Environment Variables
 
-根目录 `.env` 用于后端与 `docker-compose`。
-
-首次使用：
+Create `.env` in the project root:
 
 ```bash
 cp .env.example .env
@@ -83,7 +127,7 @@ Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-推荐配置：
+Recommended backend configuration:
 
 ```bash
 DASHSCOPE_API_KEY=your-dashscope-api-key
@@ -99,46 +143,38 @@ AUDIO_SAMPLE_RATE=16000
 AUDIO_CHANNELS=1
 ```
 
-关键变量说明：
+### Important variables
 
-- `DASHSCOPE_API_KEY`: 百炼 API Key，同时用于实时 ASR 和总结
-- `DASHSCOPE_MODEL`: 文本总结模型，例如 `qwen-plus-2025-01-25`
-- `DASHSCOPE_ASR_MODEL`: 实时 ASR 模型，当前推荐 `paraformer-realtime-v1`
-- `DASHSCOPE_TRANSLATION_MODEL`: 文本翻译模型，当前默认 `qwen-mt-flash`
-- `SUMMARY_INTERVAL`: 每累计多少条 transcript 触发一次中途 summary
-- `FFMPEG_BINARY`: `ffmpeg` 可执行文件路径；如果系统 PATH 已配置，可保持为 `ffmpeg`
-- `AUDIO_SAMPLE_RATE`: 当前默认 `16000`
-- `AUDIO_CHANNELS`: 当前默认 `1`
+- `DASHSCOPE_API_KEY`: used by ASR, translation, summary, and meeting analysis
+- `DASHSCOPE_MODEL`: used by summary and meeting analysis
+- `DASHSCOPE_ASR_MODEL`: realtime ASR model
+- `DASHSCOPE_TRANSLATION_MODEL`: transcript translation model
+- `SUMMARY_INTERVAL`: transcript count threshold for interim summary generation
+- `FFMPEG_BINARY`: ffmpeg binary path for upload transcription endpoints
 
-可选高级变量：
+### Optional advanced variables
 
-- `DASHSCOPE_ASR_WS_URL`: DashScope ASR WebSocket 地址
-- `DASHSCOPE_WORKSPACE_ID`: 指定 DashScope workspace 时使用
+- `DASHSCOPE_ASR_WS_URL`
+- `DASHSCOPE_WORKSPACE_ID`
 
-### 前端环境变量
+### Frontend local overrides
 
-如果前端需要连接非默认后端地址，可在 `frontend/.env.local` 中配置：
+If the frontend should connect to a non-default backend:
 
 ```bash
 cp frontend/.env.example frontend/.env.local
 ```
 
-Windows PowerShell:
-
-```powershell
-Copy-Item frontend/.env.example frontend/.env.local
-```
-
-示例：
+Example:
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8080
 VITE_WS_BASE_URL=ws://localhost:8080
 ```
 
-## 本地开发
+## Local Development
 
-### 1. 启动后端
+### Start backend
 
 ```bash
 cd backend
@@ -158,11 +194,11 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-后端地址：
+Backend URL:
 
 - `http://localhost:8080`
 
-### 2. 启动前端
+### Start frontend
 
 ```bash
 cd frontend
@@ -170,26 +206,17 @@ npm install
 npm run dev
 ```
 
-前端地址：
+Frontend URL:
 
 - `http://localhost:3000`
 
-开发环境下前端默认连接：
-
-- `ws://localhost:8080/ws/meeting`
-
-## Docker 启动
+## Docker
 
 ```bash
 docker-compose up --build
 ```
 
-启动后：
-
-- 前端：`http://localhost:3000`
-- 后端：`http://localhost:8080`
-
-## API 说明
+## API
 
 ### HTTP
 
@@ -198,33 +225,32 @@ docker-compose up --build
 - `POST /api/transcribe`
 - `POST /api/transcribe/batch`
 
-说明：
-
-- `/api/transcribe` 和 `/api/transcribe/batch` 仍会通过 `ffmpeg` 将上传音频转换为标准 `wav`
-- 转写后仍统一走 DashScope ASR
-
 ### WebSocket
 
-连接地址：
+Connection examples:
 
 ```text
-ws://localhost:8080/ws/meeting?scene=finance
-ws://localhost:8080/ws/meeting?scene=hr
+ws://localhost:8080/ws/meeting?scene=finance&target_lang=en
+ws://localhost:8080/ws/meeting?scene=hr&target_lang=ja
 ```
 
-后端推送消息：
+Supported websocket event types:
+
+#### `transcript`
 
 ```json
 {
   "type": "transcript",
   "data": {
     "speaker": "Speaker_A",
-    "text": "会议内容",
+    "text": "Meeting content",
     "start": 0.0,
     "end": 1.5
   }
 }
 ```
+
+#### `translation`
 
 ```json
 {
@@ -237,6 +263,35 @@ ws://localhost:8080/ws/meeting?scene=hr
 }
 ```
 
+#### `analysis`
+
+```json
+{
+  "type": "analysis",
+  "data": {
+    "overall_sentiment": "mixed",
+    "engagement_level": "medium",
+    "engagement_summary": "The discussion shows clear disagreement with active participation.",
+    "signal_counts": {
+      "agreement": 2,
+      "disagreement": 1,
+      "tension": 1,
+      "hesitation": 1
+    },
+    "highlights": [
+      {
+        "transcript_index": 4,
+        "signal": "disagreement",
+        "severity": "medium",
+        "reason": "The speaker clearly opposes the proposal."
+      }
+    ]
+  }
+}
+```
+
+#### `summary`
+
 ```json
 {
   "type": "summary",
@@ -248,6 +303,8 @@ ws://localhost:8080/ws/meeting?scene=hr
 }
 ```
 
+#### `error`
+
 ```json
 {
   "type": "error",
@@ -255,7 +312,7 @@ ws://localhost:8080/ws/meeting?scene=hr
 }
 ```
 
-停止录音时前端发送：
+#### Finalize message sent by the frontend
 
 ```json
 {
@@ -263,35 +320,34 @@ ws://localhost:8080/ws/meeting?scene=hr
 }
 ```
 
-行为约定：
+## Meeting Scenes
 
-- 录音期间前端持续发送 PCM 音频二进制帧
-- 连接建立时可通过 `target_lang` 指定目标语言，当前支持 `en` / `ja` / `ko`
-- 停止录音时先发送 `finalize`
-- 后端结束实时 ASR，会返回最终 `summary`
-- 最终 `summary` 发送完成后，后端主动关闭 WebSocket
+### `finance`
 
-## 会议场景
+- Finance / business review discussions
+- Action items
+- Decisions
+- Risks
 
-### finance
+### `hr`
 
-- 财务会议
-- 待办事项提取
-- 决策点提取
-- 风险项提取
+- Interview / hiring conversations
+- Follow-up actions
+- Interview conclusions
+- Risks
 
-### hr
+## Manual Test Scripts
 
-- 招聘 / 面试场景
-- 后续待办提取
-- 面试结论提取
-- 风险项提取
+- `FULL_FEATURE_TEST_SCRIPT.md`: end-to-end test script for transcript, translation, summary, and analysis
 
-## 当前限制
+## Current Limitations
 
-- `speaker` 仍然是占位逻辑，不是真正的 diarization
-- 实时 ASR 对术语和英文单词仍可能出现误识别
-- Summary 会结合模型输出和简单规则补全，但仍不是完整的会议纪要系统
+- `speaker` assignment is still placeholder logic, not true diarization
+- Realtime ASR can still misrecognize technical terms and English words
+- Summary combines model output with lightweight rule augmentation
+- Meeting analysis combines model output with lightweight rule fallback for obvious Chinese emotional signals
+- Sentiment / engagement analysis is meeting-level, not participant-level
+- Mobile browser recording compatibility is less reliable than desktop
 
 ## License
 
