@@ -1,6 +1,6 @@
 <template>
   <div class="meeting-room">
-    <aside class="sidebar">
+    <aside class="sidebar" :style="sidebarStyle">
       <div class="logo">
         <h2>Smart Meeting Assistant</h2>
       </div>
@@ -17,7 +17,7 @@
         <h3>Translation</h3>
         <el-select
           v-model="selectedTargetLanguage"
-          :disabled="isRecording || isFinalizing"
+          :disabled="isStarting || isRecording || isFinalizing"
           size="large"
           class="translation-select"
         >
@@ -28,6 +28,34 @@
             :value="option.value"
           />
         </el-select>
+      </div>
+
+      <div class="summary-section">
+        <h3>Meeting Summary</h3>
+        <div v-if="summary" class="summary-content">
+          <div class="summary-item" v-if="summary.todos?.length">
+            <h4>To-Dos</h4>
+            <ul>
+              <li v-for="(todo, idx) in summary.todos" :key="idx">{{ todo }}</li>
+            </ul>
+          </div>
+          <div class="summary-item" v-if="summary.decisions?.length">
+            <h4>Decisions</h4>
+            <ul>
+              <li v-for="(decision, idx) in summary.decisions" :key="idx">{{ decision }}</li>
+            </ul>
+          </div>
+          <div class="summary-item" v-if="summary.risks?.length">
+            <h4>Risks</h4>
+            <ul>
+              <li v-for="(risk, idx) in summary.risks" :key="idx">{{ risk }}</li>
+            </ul>
+          </div>
+          <div v-if="!hasSummaryContent" class="summary-empty">
+            No actionable items were extracted from this meeting.
+          </div>
+        </div>
+        <div v-else class="summary-empty">Summary pending...</div>
       </div>
 
       <div class="analysis-section">
@@ -62,8 +90,8 @@
         <el-button
           :type="isRecording ? 'danger' : 'success'"
           :icon="isRecording ? VideoPause : VideoPlay"
-          :disabled="isFinalizing"
-          :loading="isFinalizing"
+          :disabled="isStarting || isFinalizing"
+          :loading="isStarting || isFinalizing"
           @click="toggleRecording"
           size="large"
           round
@@ -75,33 +103,20 @@
       <p v-if="isFinalizing" class="finalizing-hint">Generating final summary...</p>
       <p v-if="serverError" class="error-hint">{{ serverError }}</p>
 
-      <div class="summary-section" v-if="summary">
-        <h3>Meeting Summary</h3>
-        <div class="summary-content">
-          <div class="summary-item" v-if="summary.todos?.length">
-            <h4>To-Dos</h4>
-            <ul>
-              <li v-for="(todo, idx) in summary.todos" :key="idx">{{ todo }}</li>
-            </ul>
-          </div>
-          <div class="summary-item" v-if="summary.decisions?.length">
-            <h4>Decisions</h4>
-            <ul>
-              <li v-for="(decision, idx) in summary.decisions" :key="idx">{{ decision }}</li>
-            </ul>
-          </div>
-          <div class="summary-item" v-if="summary.risks?.length">
-            <h4>Risks</h4>
-            <ul>
-              <li v-for="(risk, idx) in summary.risks" :key="idx">{{ risk }}</li>
-            </ul>
-          </div>
-          <div v-if="!hasSummaryContent" class="summary-empty">
-            No actionable items were extracted from this meeting.
-          </div>
-        </div>
-      </div>
+      <details class="diagnostics">
+        <summary class="diagnostics-summary">Session Status</summary>
+        <p class="diagnostic-line">{{ connectionStatus }}</p>
+        <p class="diagnostic-line">{{ audioStatus }}</p>
+        <p class="diagnostic-line diagnostic-error">{{ lastFailure }}</p>
+      </details>
     </aside>
+
+    <div
+      class="sidebar-resizer"
+      @mousedown="startResizing"
+      @dblclick="resetSidebarWidth"
+      title="Drag to resize. Double-click to reset."
+    ></div>
 
     <main class="main-content">
       <div class="audio-visualizer" v-if="isRecording">
@@ -151,7 +166,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useWebSocket } from '@/composables/useWebSocket'
 import type {
@@ -164,6 +179,10 @@ import type {
 } from '@/types'
 
 const TARGET_SAMPLE_RATE = 16000
+const DEFAULT_SIDEBAR_WIDTH = 320
+const MIN_SIDEBAR_WIDTH = 260
+const MIN_MAIN_WIDTH = 480
+const SIDEBAR_WIDTH_STORAGE_KEY = 'smart-meeting-assistant:sidebar-width'
 const targetLanguageOptions: Array<{ label: string; value: TranslationTargetLanguage }> = [
   { label: 'English', value: 'en' },
   { label: 'Japanese', value: 'ja' },
@@ -180,15 +199,24 @@ interface DisplayTranscriptItem extends TranscriptItem {
 
 const selectedScene = ref<'finance' | 'hr'>('finance')
 const selectedTargetLanguage = ref<TranslationTargetLanguage>('en')
+const isStarting = ref(false)
 const isRecording = ref(false)
 const isFinalizing = ref(false)
 const serverError = ref('')
+const connectionStatus = ref('Realtime service is idle.')
+const audioStatus = ref('Microphone is idle.')
+const lastFailure = ref('Last failure: none.')
+const isResizing = ref(false)
+const sidebarWidth = ref(DEFAULT_SIDEBAR_WIDTH)
 const transcripts = ref<DisplayTranscriptItem[]>([])
 const analysis = ref<MeetingAnalysis | null>(null)
 const summary = ref<MeetingSummary | null>(null)
 const transcriptList = ref<HTMLElement>()
 
 const statusText = computed(() => {
+  if (isStarting.value) {
+    return 'Starting'
+  }
   if (isRecording.value) {
     return 'Recording'
   }
@@ -198,12 +226,19 @@ const statusText = computed(() => {
   return 'Idle'
 })
 
-const statusActive = computed(() => isRecording.value || isFinalizing.value)
+const statusActive = computed(() => isStarting.value || isRecording.value || isFinalizing.value)
 const hasSummaryContent = computed(() =>
   Boolean(summary.value?.todos?.length || summary.value?.decisions?.length || summary.value?.risks?.length)
 )
+const sidebarStyle = computed(() => ({
+  width: `${sidebarWidth.value}px`,
+  flex: `0 0 ${sidebarWidth.value}px`
+}))
 
 const buttonText = computed(() => {
+  if (isStarting.value) {
+    return 'Starting...'
+  }
   if (isFinalizing.value) {
     return 'Generating...'
   }
@@ -254,7 +289,11 @@ const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
   },
   onError: (message: string) => {
     serverError.value = message
+    lastFailure.value = `Last failure: ${message}`
     console.error('WebSocket server error:', message)
+  },
+  onStatusChange: (message: string) => {
+    connectionStatus.value = message
   }
 })
 
@@ -285,6 +324,66 @@ const handleSceneChange = (scene: string) => {
   console.log('Scene changed:', scene)
 }
 
+const clampSidebarWidth = (width: number): number => {
+  const maxWidth = Math.max(MIN_SIDEBAR_WIDTH, window.innerWidth - MIN_MAIN_WIDTH)
+  return Math.min(Math.max(width, MIN_SIDEBAR_WIDTH), maxWidth)
+}
+
+const applySidebarWidth = (width: number) => {
+  sidebarWidth.value = clampSidebarWidth(width)
+}
+
+const persistSidebarWidth = () => {
+  localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth.value))
+}
+
+const stopResizing = () => {
+  if (!isResizing.value) {
+    return
+  }
+  isResizing.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', handleResize)
+  window.removeEventListener('mouseup', stopResizing)
+  persistSidebarWidth()
+}
+
+const handleResize = (event: MouseEvent) => {
+  if (!isResizing.value) {
+    return
+  }
+  applySidebarWidth(event.clientX)
+}
+
+const startResizing = (event: MouseEvent) => {
+  event.preventDefault()
+  isResizing.value = true
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', handleResize)
+  window.addEventListener('mouseup', stopResizing)
+}
+
+const resetSidebarWidth = () => {
+  applySidebarWidth(DEFAULT_SIDEBAR_WIDTH)
+  persistSidebarWidth()
+}
+
+const handleWindowResize = () => {
+  applySidebarWidth(sidebarWidth.value)
+}
+
+const formatClientError = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message || error.name
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+  return 'Unknown client-side error.'
+}
+
 const toggleRecording = async () => {
   if (isFinalizing.value) {
     return
@@ -298,23 +397,44 @@ const toggleRecording = async () => {
 
 const startRecording = async () => {
   try {
+    isStarting.value = true
+    lastFailure.value = 'Last failure: none.'
+    audioStatus.value = 'Requesting microphone access...'
     audioStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
-        sampleRate: TARGET_SAMPLE_RATE,
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true
+      }
+    })
+    audioStatus.value = 'Microphone access granted.'
+    audioStream.getTracks().forEach((track) => {
+      track.onended = () => {
+        audioStatus.value = 'Microphone stream ended.'
+      }
+      track.onmute = () => {
+        audioStatus.value = 'Microphone track muted.'
+      }
+      track.onunmute = () => {
+        audioStatus.value = 'Microphone track active.'
       }
     })
     const wsUrl = buildWebSocketUrl(selectedScene.value, selectedTargetLanguage.value)
 
     await connect(wsUrl)
 
-    audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE })
+    audioContext = new AudioContext()
     await audioContext.resume()
+    audioStatus.value = `Audio engine running (${audioContext.state}, ${audioContext.sampleRate}Hz).`
+    audioContext.onstatechange = () => {
+      audioStatus.value = `Audio engine state: ${audioContext?.state ?? 'closed'} (${audioContext?.sampleRate ?? 'unknown'}Hz).`
+    }
 
     audioSourceNode = audioContext.createMediaStreamSource(audioStream)
+    if (typeof audioContext.createScriptProcessor !== 'function') {
+      throw new Error('ScriptProcessorNode is not supported in this browser.')
+    }
     processorNode = audioContext.createScriptProcessor(2048, 1, 1)
     silentGainNode = audioContext.createGain()
     silentGainNode.gain.value = 0
@@ -339,13 +459,21 @@ const startRecording = async () => {
     isRecording.value = true
     isFinalizing.value = false
     serverError.value = ''
+    connectionStatus.value = 'Realtime service connected.'
     transcripts.value = []
     analysis.value = null
     summary.value = null
   } catch (error) {
+    const errorMessage = formatClientError(error)
+    serverError.value = errorMessage
+    lastFailure.value = `Last failure: ${errorMessage}`
+    connectionStatus.value = 'Realtime startup failed.'
+    audioStatus.value = `Failed to start microphone or audio pipeline: ${errorMessage}`
     console.error('Failed to start recording:', error)
-    await cleanupLocalAudio()
-    disconnect()
+    await cleanupLocalAudio({ preserveStatusMessage: true })
+    disconnect({ preserveStatusMessage: true })
+  } finally {
+    isStarting.value = false
   }
 }
 
@@ -387,8 +515,10 @@ const analysisHighlightClass = (signal?: MeetingSignalType): string | undefined 
 }
 
 const stopRecording = async () => {
+  audioStatus.value = 'Stopping microphone...'
   await cleanupLocalAudio()
   isRecording.value = false
+  audioStatus.value = 'Microphone stopped.'
 
   if (!isConnected.value) {
     disconnect()
@@ -399,6 +529,9 @@ const stopRecording = async () => {
   try {
     await finalize()
   } catch (error) {
+    const errorMessage = formatClientError(error)
+    serverError.value = errorMessage
+    lastFailure.value = `Last failure: ${errorMessage}`
     console.error('Failed to finalize session:', error)
     disconnect()
   } finally {
@@ -452,7 +585,7 @@ const downsampleAudio = (
   return output
 }
 
-const cleanupLocalAudio = async () => {
+const cleanupLocalAudio = async (params?: { preserveStatusMessage?: boolean }) => {
   if (processorNode) {
     processorNode.disconnect()
     processorNode.onaudioprocess = null
@@ -472,11 +605,17 @@ const cleanupLocalAudio = async () => {
   if (audioContext) {
     await audioContext.close()
     audioContext = null
+    if (!params?.preserveStatusMessage) {
+      audioStatus.value = 'Audio engine closed.'
+    }
   }
 
   if (audioStream) {
     audioStream.getTracks().forEach((track) => track.stop())
     audioStream = null
+    if (!params?.preserveStatusMessage) {
+      audioStatus.value = 'Microphone tracks stopped.'
+    }
   }
 }
 
@@ -487,8 +626,21 @@ const formatTime = (seconds: number): string => {
 }
 
 onUnmounted(() => {
+  stopResizing()
+  window.removeEventListener('resize', handleWindowResize)
   void cleanupLocalAudio()
   disconnect()
+})
+
+onMounted(() => {
+  const savedWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY))
+  if (Number.isFinite(savedWidth) && savedWidth > 0) {
+    applySidebarWidth(savedWidth)
+  } else {
+    applySidebarWidth(DEFAULT_SIDEBAR_WIDTH)
+  }
+
+  window.addEventListener('resize', handleWindowResize)
 })
 </script>
 
@@ -497,16 +649,47 @@ onUnmounted(() => {
   display: flex;
   width: 100%;
   height: 100vh;
+  min-height: 0;
 }
 
 .sidebar {
-  width: 320px;
   background-color: var(--color-bg-secondary);
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 24px;
   border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.sidebar-resizer {
+  flex: 0 0 10px;
+  cursor: col-resize;
+  position: relative;
+  background:
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent 4px,
+      rgba(255, 255, 255, 0.08) 4px,
+      rgba(255, 255, 255, 0.08) 6px,
+      transparent 6px,
+      transparent 100%
+    );
+}
+
+.sidebar-resizer:hover {
+  background:
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent 3px,
+      rgba(249, 163, 37, 0.7) 3px,
+      rgba(249, 163, 37, 0.7) 7px,
+      transparent 7px,
+      transparent 100%
+    );
 }
 
 .logo h2 {
@@ -518,6 +701,7 @@ onUnmounted(() => {
 .scene-selector h3,
 .translation-selector h3,
 .analysis-section h3,
+.diagnostics h3,
 .summary-section h3 {
   font-size: 16px;
   margin-bottom: 12px;
@@ -584,6 +768,36 @@ onUnmounted(() => {
   justify-content: center;
 }
 
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.diagnostics-summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  user-select: none;
+}
+
+.diagnostic-line {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.diagnostic-error {
+  background-color: rgba(205, 92, 92, 0.12);
+  color: #d96c54;
+}
+
 .finalizing-hint {
   margin: 0;
   font-size: 13px;
@@ -602,8 +816,9 @@ onUnmounted(() => {
 }
 
 .summary-section {
-  flex: 1;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .summary-content {
@@ -644,6 +859,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background-color: var(--color-bg-primary);
+  min-width: 0;
+  min-height: 0;
 }
 
 .audio-visualizer {
@@ -680,6 +897,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding: 24px;
+  min-height: 0;
 }
 
 .transcript-header {
@@ -713,6 +931,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  scrollbar-gutter: stable;
 }
 
 .transcript-item {
@@ -813,5 +1033,16 @@ onUnmounted(() => {
   color: var(--color-text-secondary);
   font-size: 12px;
   align-self: flex-start;
+}
+
+@media (max-width: 960px) {
+  .sidebar-resizer {
+    display: none;
+  }
+
+  .sidebar {
+    width: 320px !important;
+    flex: 0 0 320px !important;
+  }
 }
 </style>

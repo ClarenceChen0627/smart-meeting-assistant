@@ -14,11 +14,13 @@ interface UseWebSocketOptions {
   onAnalysis: (data: MeetingAnalysis) => void
   onSummary: (data: MeetingSummary) => void
   onError?: (message: string) => void
+  onStatusChange?: (message: string) => void
 }
 
 export function useWebSocket(options: UseWebSocketOptions) {
   const ws = ref<WebSocket | null>(null)
   const isConnected = ref(false)
+  const OPEN_TIMEOUT_MS = 8000
   let finalizeResolve: (() => void) | null = null
   let finalizeReject: ((reason?: unknown) => void) | null = null
 
@@ -29,15 +31,51 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
   const connect = (url: string): Promise<void> => {
     return new Promise((resolve, reject) => {
+      let settled = false
+      let openTimeout: ReturnType<typeof setTimeout> | null = null
+      const settleResolve = () => {
+        if (settled) {
+          return
+        }
+        settled = true
+        if (openTimeout) {
+          clearTimeout(openTimeout)
+          openTimeout = null
+        }
+        resolve()
+      }
+      const settleReject = (error: unknown) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        if (openTimeout) {
+          clearTimeout(openTimeout)
+          openTimeout = null
+        }
+        reject(error)
+      }
+
       try {
+        options.onStatusChange?.('Connecting to realtime service...')
         console.log('Connecting WebSocket:', url)
         const socket = new WebSocket(url)
         ws.value = socket
+        openTimeout = setTimeout(() => {
+          if (socket.readyState === WebSocket.CONNECTING) {
+            options.onStatusChange?.('Realtime service connection timed out.')
+            try {
+              socket.close()
+            } catch {}
+            settleReject(new Error('Realtime service connection timed out.'))
+          }
+        }, OPEN_TIMEOUT_MS)
 
         socket.onopen = () => {
           isConnected.value = true
+          options.onStatusChange?.('Realtime service connected.')
           console.log('WebSocket connected')
-          resolve()
+          settleResolve()
         }
 
         socket.onmessage = (event) => {
@@ -60,6 +98,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
 
         socket.onerror = (error) => {
+          options.onStatusChange?.('Realtime service reported a network error.')
           console.error('WebSocket error:', error)
         }
 
@@ -67,6 +106,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
           const wasConnected = isConnected.value
           isConnected.value = false
           ws.value = null
+          const closeMessage = `Realtime service disconnected (${event.code}${
+            event.reason ? `: ${event.reason}` : ''
+          }).`
+          options.onStatusChange?.(closeMessage)
           console.log('WebSocket closed:', event.code, event.reason)
 
           if (finalizeResolve || finalizeReject) {
@@ -79,17 +122,18 @@ export function useWebSocket(options: UseWebSocketOptions) {
             }
             clearFinalize()
           } else if (!wasConnected && event.code !== 1000 && event.code !== 1001) {
-            reject(new Error(`WebSocket failed to connect: ${event.code} ${event.reason}`))
+            settleReject(new Error(`WebSocket failed to connect: ${event.code} ${event.reason}`))
           }
         }
       } catch (error) {
+        options.onStatusChange?.('Failed to create realtime connection.')
         console.error('Failed to create WebSocket:', error)
-        reject(error)
+        settleReject(error)
       }
     })
   }
 
-  const disconnect = () => {
+  const disconnect = (params?: { preserveStatusMessage?: boolean }) => {
     if (finalizeReject) {
       finalizeReject(new Error('WebSocket closed before finalize completed.'))
       clearFinalize()
@@ -99,6 +143,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.value = null
     }
     isConnected.value = false
+    if (!params?.preserveStatusMessage) {
+      options.onStatusChange?.('Realtime connection closed locally.')
+    }
   }
 
   const sendAudio = (audioChunk: ArrayBuffer) => {
