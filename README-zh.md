@@ -4,11 +4,11 @@
 - English: [README.md](README.md)
 - 简体中文：`README-zh.md`
 
-Smart Meeting Assistant 是一个基于 Vue 3 与 FastAPI 构建的浏览器端会议助手。它支持实时语音转写、实时翻译、会议总结、待办事项提取，以及会议情感与参与度分析，整体通过 WebSocket 实时工作流串联。
+Smart Meeting Assistant 是一个基于 React 18 与 FastAPI 构建的浏览器端会议助手。它支持实时语音转写、实时翻译、会议总结、待办事项提取，以及会议情感与参与度分析，整体通过 WebSocket 实时工作流串联。
 
 ## 架构
 
-- `frontend`: Vue 3 + TypeScript + Vite
+- `frontend`: React 18 + TypeScript + Vite + Tailwind CSS
 - `backend`: FastAPI + Uvicorn
 
 ## 功能
@@ -77,10 +77,11 @@ smart-meeting-assistant/
 
 ### 前端
 
-- Vue 3
+- React 18
 - TypeScript
 - Vite
-- Element Plus
+- Tailwind CSS
+- Radix UI
 - WebSocket
 - Web Audio API
 
@@ -213,7 +214,7 @@ npm run dev
 
 前端地址：
 
-- `http://localhost:3000`
+- `https://localhost:5173`
 
 ## Docker
 

@@ -4,11 +4,11 @@ Language:
 - English: `README.md`
 - 简体中文: [README-zh.md](README-zh.md)
 
-Smart Meeting Assistant is a browser-based meeting copilot built with Vue 3 and FastAPI. It supports live speech transcription, live transcript translation, meeting summarization, action-item extraction, and meeting sentiment / engagement analysis over a WebSocket-based realtime workflow.
+Smart Meeting Assistant is a browser-based meeting copilot built with React 18 and FastAPI. It supports live speech transcription, live transcript translation, meeting summarization, action-item extraction, and meeting sentiment / engagement analysis over a WebSocket-based realtime workflow.
 
 ## Architecture
 
-- `frontend`: Vue 3 + TypeScript + Vite
+- `frontend`: React 18 + TypeScript + Vite + Tailwind CSS
 - `backend`: FastAPI + Uvicorn
 
 ## Features
@@ -76,10 +76,11 @@ smart-meeting-assistant/
 
 ### Frontend
 
-- Vue 3
+- React 18
 - TypeScript
 - Vite
-- Element Plus
+- Tailwind CSS
+- Radix UI
 - WebSocket
 - Web Audio API
 
@@ -212,7 +213,7 @@ npm run dev
 
 Frontend URL:
 
-- `http://localhost:3000`
+- `https://localhost:5173`
 
 ## Docker
 
