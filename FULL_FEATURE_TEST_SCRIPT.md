@@ -98,33 +98,34 @@
 
 ### Live Transcript
 
-- 右侧 transcript 应持续更新
-- 鼠标滚轮应能向下看到后续内容
+- 在默认的 `Transcript` 选项卡中，发言内容应持续更新
+- 页面支持向下滚动查看会议记录
 
 ### Translation
 
-- 每条 transcript 下方应显示目标语言译文
+- 每条 transcript 内容气泡下方应显示目标语言译文
 
 ### Meeting Summary
 
-- 左侧应显示 `To-Dos / Decisions / Risks`
+- 切换到 `Action Items` 选项卡，应分类显示 `To-Dos / Decisions / Risks` 列表（可手动勾选状态）
+- 切换到 `Summary` 选项卡可以查看结构化大纲
 - 如果模型提取不完全，也不应该完全没有 summary
 
 ### Meeting Analysis
 
-- 左侧应显示：
+- 切换到 `Sentiment` 选项卡，应能看到监控表盘：
   - `Overall Sentiment`
   - `Engagement Level`
   - `Engagement Summary`
-  - 四类 `Signals`
-- 右侧应对部分 transcript 片段高亮，并显示信号标签与原因
+  - `Signal Distribution` (互动信号的数据饼图)
+- 下方应展示 `Emotionally Significant Moments`，直接列出关键高亮片段，并包含 AI 原因分析
 
 ## 快速检查清单
 
 录音结束后你可以按这个顺序看：
 
-1. Transcript 是否完整显示，能否滚动到底部
-2. Translation 是否逐条出现
-3. Summary 是否有 `To-Dos / Decisions / Risks`
-4. Analysis 是否有非 0 的信号计数
-5. 高亮片段是否和口播内容大致一致
+1. `Transcript` 选项卡：是否完整显示，能否滚动到底部
+2. `Transcript` 选项卡：翻译是否逐条挂载出现
+3. `Action Items` 选项卡：是否有抽取的 `To-Dos / Decisions / Risks`
+4. `Sentiment` 选项卡：是否有非空的 `Signal Distribution` 饼图
+5. `Sentiment` 选项卡底层的高亮片段是否和口播内容大致一致，理由合理
