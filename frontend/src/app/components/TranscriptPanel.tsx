@@ -53,7 +53,8 @@ const getSpeakerColor = (speaker: string) => {
 };
 
 export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: TranscriptPanelProps) {
-  const showTranslation = currentLanguage !== 'en';
+  // Always show translation if available, regardless of whether it is 'en'
+  const showTranslation = true;
   
   // Calculate unique speakers for stats
   const safeTranscripts = transcripts || [];

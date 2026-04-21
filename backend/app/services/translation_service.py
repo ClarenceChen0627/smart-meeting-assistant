@@ -6,8 +6,15 @@ from app.clients.dashscope_client import DashScopeClient
 class TranslationService:
     SUPPORTED_TARGET_LANGUAGES = {
         "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "zh": "Chinese",
         "ja": "Japanese",
         "ko": "Korean",
+        "pt": "Portuguese",
+        "ar": "Arabic",
+        "hi": "Hindi",
     }
 
     def __init__(self, dashscope_client: DashScopeClient) -> None:

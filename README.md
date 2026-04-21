@@ -18,10 +18,9 @@ Smart Meeting Assistant is a browser-based meeting copilot built with React 18 a
 - Browser microphone capture
 - Realtime ASR with DashScope Paraformer (`paraformer-realtime-v1`)
 - Realtime transcript rendering
-- Realtime transcript translation to one target language:
-  - English
-  - Japanese
-  - Korean
+- Real-time transcript translation to a target language, currently supporting 10 languages including:
+  - English, Spanish, French, German, Chinese
+  - Japanese, Korean, Portuguese, Arabic, Hindi
 
 ### Meeting summary
 
