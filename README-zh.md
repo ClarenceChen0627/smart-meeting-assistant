@@ -236,7 +236,8 @@ docker-compose up --build
 连接示例：
 
 ```text
-ws://localhost:8080/ws/meeting?scene=finance&target_lang=en
+ws://localhost:8080/ws/meeting?scene=general&target_lang=en
+ws://localhost:8080/ws/meeting?scene=finance&target_lang=zh
 ws://localhost:8080/ws/meeting?scene=hr&target_lang=ja
 ```
 
@@ -327,6 +328,13 @@ ws://localhost:8080/ws/meeting?scene=hr&target_lang=ja
 ```
 
 ## 会议场景
+
+### `general` (默认)
+
+- 常规会议讨论
+- 行动项
+- 决策
+- 风险
 
 ### `finance`
 

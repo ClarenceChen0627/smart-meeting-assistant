@@ -235,7 +235,8 @@ docker-compose up --build
 Connection examples:
 
 ```text
-ws://localhost:8080/ws/meeting?scene=finance&target_lang=en
+ws://localhost:8080/ws/meeting?scene=general&target_lang=en
+ws://localhost:8080/ws/meeting?scene=finance&target_lang=zh
 ws://localhost:8080/ws/meeting?scene=hr&target_lang=ja
 ```
 
@@ -326,6 +327,13 @@ Supported websocket event types:
 ```
 
 ## Meeting Scenes
+
+### `general` (Default)
+
+- General meeting discussions
+- Action items
+- Decisions
+- Risks
 
 ### `finance`
 
