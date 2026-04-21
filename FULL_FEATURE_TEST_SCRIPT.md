@@ -113,7 +113,7 @@
 
 ### Meeting Analysis
 
-- 切换到 `Sentiment` 选项卡，应能看到监控表盘：
+- 切换到 `Analysis` 选项卡，应能看到监控表盘：
   - `Overall Sentiment`
   - `Engagement Level`
   - `Engagement Summary`
@@ -127,5 +127,5 @@
 1. `Transcript` 选项卡：是否完整显示，能否滚动到底部
 2. `Transcript` 选项卡：翻译是否逐条挂载出现
 3. `Action Items` 选项卡：是否有抽取的 `To-Dos / Decisions / Risks`
-4. `Sentiment` 选项卡：是否有非空的 `Signal Distribution` 饼图
-5. `Sentiment` 选项卡底层的高亮片段是否和口播内容大致一致，理由合理
+4. `Analysis` 选项卡：是否有非空的 `Signal Distribution` 饼图
+5. `Analysis` 选项卡底层的高亮片段是否和口播内容大致一致，理由合理

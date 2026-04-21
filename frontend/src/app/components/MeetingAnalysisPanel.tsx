@@ -8,7 +8,7 @@ interface DisplayTranscriptItem {
   start: number;
 }
 
-interface SentimentAnalysisProps {
+interface MeetingAnalysisPanelProps {
   analysis: MeetingAnalysis | null;
   transcripts: DisplayTranscriptItem[];
 }
@@ -26,13 +26,13 @@ const formatTime = (seconds: number): string => {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
 
-export function SentimentAnalysis({ analysis, transcripts }: SentimentAnalysisProps) {
+export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisPanelProps) {
   const safeTranscripts = transcripts || [];
 
   if (!analysis) {
     return (
       <div className="max-w-7xl mx-auto flex items-center justify-center py-20 text-gray-500">
-        <p>Sentiment analysis will appear here once the server processes the data.</p>
+        <p>Meeting analysis will appear here once the server processes the data.</p>
       </div>
     );
   }

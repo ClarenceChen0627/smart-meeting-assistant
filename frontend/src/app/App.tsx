@@ -3,7 +3,7 @@ import { Play, Pause, Mic, MicOff, AlertCircle } from 'lucide-react';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import { SummaryPanel } from './components/SummaryPanel';
 import { ActionItemsPanel } from './components/ActionItemsPanel';
-import { SentimentAnalysis } from './components/SentimentAnalysis';
+import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
 import { TranslationControls } from './components/TranslationControls';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAudioRecording } from '../hooks/useAudioRecording';
@@ -19,7 +19,7 @@ interface DisplayTranscriptItem extends TranscriptItem {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'sentiment'>('transcript');
+  const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'analysis'>('transcript');
   const [isRecording, setIsRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
@@ -158,7 +158,7 @@ export default function App() {
     { id: 'transcript', label: 'Live Transcript' },
     { id: 'summary', label: 'Summary' },
     { id: 'actions', label: 'Action Items' },
-    { id: 'sentiment', label: 'Sentiment Analysis' }
+    { id: 'analysis', label: 'Analysis' }
   ];
 
   return (
@@ -264,7 +264,7 @@ export default function App() {
           )}
           {activeTab === 'summary' && <SummaryPanel summary={summary} />}
           {activeTab === 'actions' && <ActionItemsPanel summary={summary} />}
-          {activeTab === 'sentiment' && <SentimentAnalysis analysis={analysis} transcripts={transcripts} />}
+          {activeTab === 'analysis' && <MeetingAnalysisPanel analysis={analysis} transcripts={transcripts} />}
         </div>
       </div>
     </div>
