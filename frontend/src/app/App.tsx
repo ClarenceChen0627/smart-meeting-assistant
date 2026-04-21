@@ -5,6 +5,7 @@ import { SummaryPanel } from './components/SummaryPanel';
 import { ActionItemsPanel } from './components/ActionItemsPanel';
 import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
 import { TranslationControls } from './components/TranslationControls';
+import { SceneControls } from './components/SceneControls';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAudioRecording } from '../hooks/useAudioRecording';
 import type { TranscriptItem, MeetingAnalysis, MeetingSummary, TranslationTargetLanguage } from '../types';
@@ -20,6 +21,7 @@ interface DisplayTranscriptItem extends TranscriptItem {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'analysis'>('transcript');
+  const [currentScene, setCurrentScene] = useState<string>('general');
   const [isRecording, setIsRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
@@ -106,13 +108,13 @@ export default function App() {
 
   const handleStartRecording = async () => {
     try {
+      const wsUrl = buildWebSocketUrl(currentScene, currentLanguage);
       setIsStarting(true);
       setServerError('');
       setTranscripts([]);
       setAnalysis(null);
       setSummary(null);
 
-      const wsUrl = buildWebSocketUrl('finance', currentLanguage);
       await connect(wsUrl);
       await startAudio();
       
@@ -181,6 +183,10 @@ export default function App() {
 
           {/* Recording Controls */}
           <div className="flex items-center gap-3">
+            <SceneControls
+              currentScene={currentScene}
+              onSceneChange={setCurrentScene}
+            />
             <TranslationControls
               currentLanguage={currentLanguage}
               onLanguageChange={(lang) => setCurrentLanguage(lang as TranslationTargetLanguage)}
