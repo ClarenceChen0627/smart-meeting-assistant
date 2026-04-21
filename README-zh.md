@@ -214,7 +214,7 @@ npm run dev
 
 前端地址：
 
-- `https://localhost:5173`
+- `http://localhost:5173`
 
 ## Docker
 

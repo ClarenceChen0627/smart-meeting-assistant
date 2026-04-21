@@ -213,7 +213,7 @@ npm run dev
 
 Frontend URL:
 
-- `https://localhost:5173`
+- `http://localhost:5173`
 
 ## Docker
 

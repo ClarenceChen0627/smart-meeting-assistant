@@ -16,7 +16,6 @@ Make sure you have Node 18+ installed.
    ```bash
    npm run dev
    ```
-   *Note: Standard HTTP protocol will block the Web Audio API unless the app is accessed on `localhost`. For mobile/LAN testing, Vite will serve the project locally over a self-signed HTTPS certificate.*
 
 3. **Build for production:**
    ```bash
