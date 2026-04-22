@@ -4,12 +4,13 @@ Language:
 - English: `README.md`
 - 简体中文: [README-zh.md](README-zh.md)
 
-Smart Meeting Assistant is a browser-based meeting copilot built with React 18 and FastAPI. It supports live speech transcription, live transcript translation, meeting summarization, action-item extraction, and meeting sentiment / engagement analysis over a WebSocket-based realtime workflow.
+Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It supports live speech transcription, live transcript translation, meeting summarization, action-item extraction, and meeting sentiment / engagement analysis over a WebSocket-based realtime workflow. The frontend can run in a browser or as a Windows-first Electron desktop client.
 
 ## Architecture
 
 - `frontend`: React 18 + TypeScript + Vite + Tailwind CSS
 - `backend`: FastAPI + Uvicorn
+- `frontend/electron`: Electron desktop shell for the Vite frontend
 
 ## Features
 
@@ -51,6 +52,7 @@ Smart Meeting Assistant is a browser-based meeting copilot built with React 18 a
 - Scrollable transcript list
 - Bilingual transcript cards
 - Separate Meeting Summary and Meeting Analysis panels
+- Optional Windows portable Electron desktop client
 
 ### Upload transcription
 
@@ -213,6 +215,41 @@ npm run dev
 Frontend URL:
 
 - `http://localhost:5173`
+
+## Electron Desktop Client
+
+The first desktop client is a Windows-first Electron portable build. It wraps the existing React/Vite frontend only; it does not bundle or start the Python/FastAPI backend.
+
+Start the backend before using the desktop client:
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+To point the desktop client at a backend, configure `frontend/.env.local`:
+
+```bash
+VITE_WS_BASE_URL=ws://localhost:8080
+```
+
+Run Electron in development:
+
+```powershell
+cd frontend
+npm install
+npm run dev:electron
+```
+
+Build the Windows portable app:
+
+```powershell
+cd frontend
+npm run electron:pack
+```
+
+The portable executable is generated under `frontend/release/`. The FastAPI backend must still be running at `localhost:8080` or the configured backend URL.
 
 ## Docker
 
