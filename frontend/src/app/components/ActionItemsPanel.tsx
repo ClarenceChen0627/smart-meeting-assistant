@@ -1,16 +1,69 @@
-import { CheckCircle2, Circle } from 'lucide-react';
+import { CheckCircle2, Circle, Calendar, User, Clock } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import type { MeetingSummary } from '../../types';
 
 interface ActionItem {
   id: string;
   task: string;
+  assignee: string;
+  deadline: string;
+  priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'completed';
+  extractedFrom: string;
+  timestamp: string;
 }
 
 interface ActionItemsPanelProps {
   summary: MeetingSummary | null;
 }
+
+const priorityColors = {
+  high: 'bg-red-100 text-red-700 border-red-200',
+  medium: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+  low: 'bg-green-100 text-green-700 border-green-200'
+};
+
+const statusColors = {
+  pending: 'text-gray-400',
+  completed: 'text-green-500'
+};
+
+const inferPriority = (task: string): ActionItem['priority'] => {
+  const normalized = task.toLowerCase();
+
+  if (/\b(urgent|critical|blocker|risk|asap|high)\b/.test(normalized)) {
+    return 'high';
+  }
+
+  if (/\b(optional|later|low)\b/.test(normalized)) {
+    return 'low';
+  }
+
+  return 'medium';
+};
+
+const inferDeadline = (task: string) => {
+  const normalized = task.toLowerCase();
+
+  if (/\btoday\b/.test(normalized)) {
+    return 'Today';
+  }
+
+  if (/\btomorrow\b/.test(normalized)) {
+    return 'Tomorrow';
+  }
+
+  if (/\bnext week\b/.test(normalized)) {
+    return 'Next Week';
+  }
+
+  const weekday = task.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i);
+  if (weekday) {
+    return weekday[0];
+  }
+
+  return 'Not specified';
+};
 
 export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
   const [items, setItems] = useState<ActionItem[]>([]);
@@ -20,7 +73,12 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
       setItems(summary.todos.map((todo, index) => ({
         id: `action-${index}`,
         task: todo,
-        status: 'pending'
+        assignee: 'Unassigned',
+        deadline: inferDeadline(todo),
+        priority: inferPriority(todo),
+        status: 'pending',
+        extractedFrom: todo,
+        timestamp: 'Summary'
       })));
     } else {
       setItems([]);
@@ -78,14 +136,37 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
                 <div className="flex items-start gap-4">
                   <button
                     onClick={() => toggleStatus(item.id)}
-                    className="mt-1 flex-shrink-0 text-gray-400 hover:text-blue-500"
+                    className={`mt-1 flex-shrink-0 ${statusColors[item.status]}`}
                   >
                     <Circle className="w-5 h-5" />
                   </button>
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-4 mb-2">
-                       <h3 className="text-sm text-gray-900">{item.task}</h3>
+                      <h3 className="text-sm text-gray-900">{item.task}</h3>
+                      <span className={`px-2 py-1 rounded text-xs border ${priorityColors[item.priority]}`}>
+                        {item.priority}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 mb-3">
+                      <div className="flex items-center gap-1.5">
+                        <User className="w-4 h-4" />
+                        <span>{item.assignee}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Calendar className="w-4 h-4" />
+                        <span>{item.deadline}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-4 h-4" />
+                        <span>Extracted at {item.timestamp}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
+                      <p className="text-xs text-blue-600 mb-1">Extracted from transcript:</p>
+                      <p className="text-sm text-gray-700 italic">"{item.extractedFrom}"</p>
                     </div>
                   </div>
                 </div>
@@ -108,7 +189,7 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
                 <div className="flex items-start gap-4">
                   <button
                     onClick={() => toggleStatus(item.id)}
-                    className="mt-1 flex-shrink-0 text-green-500"
+                    className={`mt-1 flex-shrink-0 ${statusColors[item.status]}`}
                   >
                     <CheckCircle2 className="w-5 h-5" />
                   </button>
@@ -116,6 +197,20 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-4 mb-2">
                       <h3 className="text-sm text-gray-900 line-through">{item.task}</h3>
+                      <span className={`px-2 py-1 rounded text-xs border ${priorityColors[item.priority]}`}>
+                        {item.priority}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500">
+                      <div className="flex items-center gap-1.5">
+                        <User className="w-4 h-4" />
+                        <span>{item.assignee}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Calendar className="w-4 h-4" />
+                        <span>{item.deadline}</span>
+                      </div>
                     </div>
                   </div>
                 </div>

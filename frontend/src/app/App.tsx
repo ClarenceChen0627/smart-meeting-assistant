@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState } from 'react';
 import { Play, Pause, Mic, MicOff, AlertCircle } from 'lucide-react';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import { SummaryPanel } from './components/SummaryPanel';
@@ -268,7 +268,7 @@ export default function App() {
               transcripts={transcripts}
             />
           )}
-          {activeTab === 'summary' && <SummaryPanel summary={summary} />}
+          {activeTab === 'summary' && <SummaryPanel summary={summary} transcripts={transcripts} />}
           {activeTab === 'actions' && <ActionItemsPanel summary={summary} />}
           {activeTab === 'analysis' && <MeetingAnalysisPanel analysis={analysis} transcripts={transcripts} />}
         </div>
