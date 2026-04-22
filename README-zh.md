@@ -215,6 +215,41 @@ npm run dev
 
 - `http://localhost:5173`
 
+## Electron 桌面客户端
+
+第一版桌面客户端是 Windows 优先的 Electron 便携版。它只包装现有 React/Vite 前端，不内置 Python/FastAPI 后端。
+
+使用桌面客户端前，请先单独启动后端：
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+如需指定桌面端连接的后端地址，可在 `frontend/.env.local` 中配置：
+
+```bash
+VITE_WS_BASE_URL=ws://localhost:8080
+```
+
+开发模式启动 Electron：
+
+```powershell
+cd frontend
+npm install
+npm run dev:electron
+```
+
+生成 Windows portable 包：
+
+```powershell
+cd frontend
+npm run electron:pack
+```
+
+打包产物会生成在 `frontend/release/`。运行 portable exe 后，仍然需要确保 FastAPI 后端已经在 `localhost:8080` 或配置的后端地址上运行。
+
 ## Docker
 
 ```bash
