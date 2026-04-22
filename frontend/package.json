@@ -3,10 +3,15 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "description": "Smart Meeting Assistant desktop client",
+  "author": "Smart Meeting Assistant",
+  "main": "electron/main.cjs",
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:electron": "concurrently -k -n vite,electron -c blue,green \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "electron:pack": "npm run build && electron-builder --win portable"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -70,8 +75,12 @@
     "@types/node": "^25.6.0",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "4.7.0",
+    "concurrently": "^9.2.1",
+    "electron": "^41.2.2",
+    "electron-builder": "^26.8.1",
     "tailwindcss": "4.1.12",
-    "vite": "6.3.5"
+    "vite": "6.3.5",
+    "wait-on": "^9.0.5"
   },
   "peerDependencies": {
     "react": "18.3.1",
@@ -88,6 +97,25 @@
   "pnpm": {
     "overrides": {
       "vite": "6.3.5"
+    }
+  },
+  "build": {
+    "appId": "com.smartmeeting.assistant",
+    "productName": "Smart Meeting Assistant",
+    "asar": true,
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ]
     }
   }
 }
