@@ -18,16 +18,39 @@ async def _transcribe_upload(request: Request, file: UploadFile) -> list[Transcr
             filename=file.filename,
             content_type=file.content_type,
         )
-        segments = await request.app.state.asr_client.transcribe_wav(wav_audio)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    provider = request.query_params.get("provider")
+    asr_provider_service = request.app.state.asr_provider_service
+    selection = asr_provider_service.resolve_provider(provider)
+    try:
+        segments = await selection.client.transcribe_wav(wav_audio)
+    except RuntimeError as exc:
+        fallback = asr_provider_service.resolve_fallback(selection.provider_name)
+        if fallback is None:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        segments = await fallback.client.transcribe_wav(wav_audio)
+        selection = fallback
+
     transcripts = [
-        request.app.state.speaker_service.assign_speaker(segment, transcript_index=index)
+        request.app.state.speaker_service.assign_speaker(
+            segment,
+            transcript_index=index,
+            speaker=getattr(segment, "speaker", None),
+            speaker_is_final=getattr(segment, "speaker_is_final", selection.provider_name == "volcengine"),
+        )
         for index, segment in enumerate(segments)
     ]
+    if selection.should_run_diarization:
+        diarization_result = await request.app.state.diarization_service.diarize_audio_bytes(wav_audio)
+        transcripts = request.app.state.diarization_service.assign_speakers(
+            transcripts,
+            diarization_result.turns,
+            speaker_is_final=diarization_result.succeeded,
+        )
     return transcripts
 
 
@@ -36,7 +59,7 @@ async def transcribe(request: Request, file: UploadFile = File(...)) -> Transcri
     transcripts = await _transcribe_upload(request, file)
     if transcripts:
         return transcripts[0]
-    return TranscriptItem(speaker="Speaker_A", text="", start=0.0, end=0.0)
+    return request.app.state.speaker_service.create_empty_transcript()
 
 
 @router.post("/api/transcribe/batch", response_model=list[TranscriptItem])

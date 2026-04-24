@@ -10,4 +10,7 @@ class TranscriptSegment(BaseModel):
 
 
 class TranscriptItem(TranscriptSegment):
+    transcript_index: int
     speaker: str
+    speaker_is_final: bool = False
+    transcript_is_final: bool = True

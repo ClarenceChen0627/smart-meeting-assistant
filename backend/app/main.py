@@ -13,9 +13,12 @@ from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
 from app.clients.dashscope_asr_client import DashScopeASRClient
 from app.clients.dashscope_client import DashScopeClient
+from app.clients.volcengine_asr_client import VolcengineASRClient
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.audio_codec_service import AudioCodecService
+from app.services.asr_provider_service import ASRProviderService
+from app.services.diarization_service import DiarizationService
 from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
@@ -29,28 +32,40 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asr_client = DashScopeASRClient(settings)
+    dashscope_asr_client = DashScopeASRClient(settings)
+    volcengine_asr_client = VolcengineASRClient(settings)
     dashscope_client = DashScopeClient(settings)
     audio_codec_service = AudioCodecService(settings)
     speaker_service = SpeakerService()
+    diarization_service = DiarizationService(settings, speaker_service)
+    asr_provider_service = ASRProviderService(
+        settings=settings,
+        dashscope_client=dashscope_asr_client,
+        volcengine_client=volcengine_asr_client,
+    )
     summary_service = SummaryService(dashscope_client)
     sentiment_analysis_service = SentimentAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
     session_manager = SessionManager(
         settings=settings,
-        asr_client=asr_client,
+        asr_provider_service=asr_provider_service,
         audio_codec_service=audio_codec_service,
         speaker_service=speaker_service,
+        diarization_service=diarization_service,
         summary_service=summary_service,
         sentiment_analysis_service=sentiment_analysis_service,
         translation_service=translation_service,
     )
 
     app.state.settings = settings
-    app.state.asr_client = asr_client
+    app.state.asr_client = dashscope_asr_client
+    app.state.dashscope_asr_client = dashscope_asr_client
+    app.state.volcengine_asr_client = volcengine_asr_client
+    app.state.asr_provider_service = asr_provider_service
     app.state.dashscope_client = dashscope_client
     app.state.audio_codec_service = audio_codec_service
     app.state.speaker_service = speaker_service
+    app.state.diarization_service = diarization_service
     app.state.summary_service = summary_service
     app.state.sentiment_analysis_service = sentiment_analysis_service
     app.state.translation_service = translation_service
@@ -61,16 +76,29 @@ async def lifespan(app: FastAPI):
         logger.info("Using ffmpeg binary: %s", ffmpeg_binary)
     except RuntimeError as exc:
         logger.warning("%s", exc)
-    if asr_client.is_configured:
-        logger.info("Using DashScope ASR model: %s", settings.dashscope_asr_model)
+    if dashscope_asr_client.is_configured:
+        logger.info("DashScope ASR is configured with model: %s", settings.dashscope_asr_model)
     else:
         logger.warning("DashScope ASR is not configured.")
+    if volcengine_asr_client.is_configured:
+        logger.info(
+            "Volcengine ASR is configured with resource: %s (default provider=%s)",
+            settings.volcengine_asr_resource_id,
+            settings.default_asr_provider,
+        )
+    else:
+        logger.warning("Volcengine ASR is not configured.")
     if translation_service.is_configured:
         logger.info("Using DashScope translation model: %s", settings.dashscope_translation_model)
+    if settings.diarization_enabled:
+        logger.info("Speaker diarization is enabled with model: %s", settings.diarization_model)
+    else:
+        logger.info("Speaker diarization is disabled.")
 
     logger.info("Starting %s %s", settings.service_name, settings.service_version)
     yield
-    await asr_client.aclose()
+    await dashscope_asr_client.aclose()
+    await volcengine_asr_client.aclose()
     await dashscope_client.aclose()
 
 

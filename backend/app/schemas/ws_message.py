@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 class WebSocketMessageType(str, Enum):
     TRANSCRIPT = "transcript"
+    TRANSCRIPT_UPDATE = "transcript_update"
+    SPEAKER_UPDATE = "speaker_update"
     TRANSLATION = "translation"
     ANALYSIS = "analysis"
     SUMMARY = "summary"
@@ -21,3 +23,9 @@ class WebSocketMessage(BaseModel):
 
 class FinalizeControlMessage(BaseModel):
     type: Literal["finalize"]
+
+
+class SpeakerUpdate(BaseModel):
+    transcript_index: int
+    speaker: str
+    speaker_is_final: bool = True

@@ -1,11 +1,32 @@
 export interface TranscriptItem {
+  transcript_index: number
   speaker: string
+  speaker_is_final: boolean
+  transcript_is_final: boolean
   text: string
   start: number
   end: number
 }
 
-export type TranslationTargetLanguage = 'en' | 'ja' | 'ko'
+export interface SpeakerUpdate {
+  transcript_index: number
+  speaker: string
+  speaker_is_final: true
+}
+
+export type ASRProvider = 'volcengine' | 'dashscope'
+
+export type TranslationTargetLanguage =
+  | 'en'
+  | 'es'
+  | 'fr'
+  | 'de'
+  | 'zh'
+  | 'ja'
+  | 'ko'
+  | 'pt'
+  | 'ar'
+  | 'hi'
 
 export interface TranscriptTranslation {
   transcript_index: number
@@ -46,8 +67,8 @@ export interface MeetingSummary {
 }
 
 export interface WebSocketMessage {
-  type: 'transcript' | 'translation' | 'analysis' | 'summary' | 'error'
-  data: TranscriptItem | TranscriptTranslation | MeetingAnalysis | MeetingSummary | string
+  type: 'transcript' | 'transcript_update' | 'speaker_update' | 'translation' | 'analysis' | 'summary' | 'error'
+  data: TranscriptItem | SpeakerUpdate | TranscriptTranslation | MeetingAnalysis | MeetingSummary | string
 }
 
 export interface WebSocketControlMessage {

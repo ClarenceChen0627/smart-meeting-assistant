@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
+import wave
 from dataclasses import dataclass, field
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
-from app.clients.dashscope_asr_client import DashScopeASRClient, DashScopeASRStream
+from app.clients.asr_base import ASRClient, ASRStream
 from app.core.config import Settings
 from app.schemas.analysis import MeetingAnalysis
 from app.schemas.translation import TranscriptTranslation
 from app.schemas.transcript import TranscriptItem
-from app.schemas.ws_message import WebSocketMessage, WebSocketMessageType
+from app.schemas.ws_message import SpeakerUpdate, WebSocketMessage, WebSocketMessageType
+from app.services.asr_provider_service import ASRProviderSelection, ASRProviderService
 from app.services.audio_codec_service import AudioCodecService
+from app.services.diarization_service import DiarizationService
 from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -29,6 +35,9 @@ class MeetingSession:
     scene: str
     target_lang: str | None
     websocket: WebSocket
+    active_provider: str
+    asr_client: ASRClient
+    should_run_diarization: bool
     audio_queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     translation_queue: asyncio.Queue[tuple[int, str] | None] = field(default_factory=asyncio.Queue)
     transcripts: list[TranscriptItem] = field(default_factory=list)
@@ -40,11 +49,15 @@ class MeetingSession:
     last_analysis_transcript_count: int = 0
     latest_analysis: MeetingAnalysis = field(default_factory=MeetingAnalysis.empty)
     analysis_in_progress: bool = False
+    analysis_task: asyncio.Task[None] | None = None
     translated_transcript_indices: set[int] = field(default_factory=set)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_task: asyncio.Task[None] | None = None
-    asr_stream: DashScopeASRStream | None = None
+    asr_stream: ASRStream | None = None
     translation_worker_task: asyncio.Task[None] | None = None
+    session_audio_path: Path | None = None
+    session_audio_writer: wave.Wave_write | None = None
+    active_partial_transcript_index: int | None = None
 
 
 class SessionManager:
@@ -52,16 +65,19 @@ class SessionManager:
         self,
         *,
         settings: Settings,
-        asr_client: DashScopeASRClient,
+        asr_provider_service: ASRProviderService,
         audio_codec_service: AudioCodecService,
         speaker_service: SpeakerService,
+        diarization_service: DiarizationService,
         summary_service: SummaryService,
         sentiment_analysis_service: SentimentAnalysisService,
         translation_service: TranslationService,
     ) -> None:
         self._settings = settings
-        self._asr_client = asr_client
+        self._asr_provider_service = asr_provider_service
+        self._audio_codec_service = audio_codec_service
         self._speaker_service = speaker_service
+        self._diarization_service = diarization_service
         self._summary_service = summary_service
         self._sentiment_analysis_service = sentiment_analysis_service
         self._translation_service = translation_service
@@ -72,14 +88,20 @@ class SessionManager:
         websocket: WebSocket,
         scene: str,
         target_lang: str | None,
+        preferred_provider: str | None = None,
     ) -> MeetingSession:
         normalized_target_lang = self._translation_service.normalize_target_lang(target_lang)
+        selection = self._asr_provider_service.resolve_provider(preferred_provider)
         session = MeetingSession(
             session_id=uuid4().hex,
             scene=scene,
             target_lang=normalized_target_lang,
             websocket=websocket,
+            active_provider=selection.provider_name,
+            asr_client=selection.client,
+            should_run_diarization=selection.should_run_diarization,
         )
+        self._open_session_audio_writer(session)
         session.worker_task = asyncio.create_task(self._consume_audio(session))
         if normalized_target_lang and self._translation_service.is_configured:
             session.translation_worker_task = asyncio.create_task(self._consume_translations(session))
@@ -90,6 +112,7 @@ class SessionManager:
         if session.finalizing:
             await self._send_error(session, "Session is finalizing; audio chunk ignored.")
             return
+        self._persist_session_audio(session, payload)
         await session.audio_queue.put(payload)
 
     async def finalize(self, session: MeetingSession) -> None:
@@ -114,18 +137,28 @@ class SessionManager:
                 await session.translation_worker_task
             except asyncio.CancelledError:
                 pass
+        if session.analysis_task is not None and not session.analysis_task.done():
+            session.analysis_task.cancel()
+            try:
+                await session.analysis_task
+            except asyncio.CancelledError:
+                pass
         if session.asr_stream is not None:
             await session.asr_stream.aclose()
             session.asr_stream = None
+        self._close_session_audio_writer(session)
+        if session.session_audio_path is not None:
+            session.session_audio_path.unlink(missing_ok=True)
+            session.session_audio_path = None
 
     async def send_error(self, session: MeetingSession, message: str) -> None:
         await self._send_error(session, message)
 
     async def _consume_audio(self, session: MeetingSession) -> None:
-        if not self._asr_client.is_configured:
+        if not session.asr_client.is_configured:
             await self._send_error_once(
                 session,
-                "DashScope ASR is not configured. Set DASHSCOPE_API_KEY and DASHSCOPE_ASR_MODEL.",
+                f"ASR provider '{session.active_provider}' is not configured.",
             )
             session.transcription_blocked = True
 
@@ -144,7 +177,7 @@ class SessionManager:
                 try:
                     await session.asr_stream.send_audio(payload)
                 except RuntimeError as exc:
-                    logger.exception("Streaming audio failed for %s", session.session_id)
+                    logger.exception("Streaming audio failed for %s via %s", session.session_id, session.active_provider)
                     await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
                     continue
 
@@ -153,7 +186,7 @@ class SessionManager:
                     try:
                         await session.asr_stream.finish()
                     except RuntimeError as exc:
-                        logger.exception("Finalizing ASR stream failed for %s", session.session_id)
+                        logger.exception("Finalizing ASR stream failed for %s via %s", session.session_id, session.active_provider)
                         await self._handle_asr_error(
                             session,
                             str(exc).strip() or exc.__class__.__name__,
@@ -170,8 +203,9 @@ class SessionManager:
                         )
                     finally:
                         session.translation_worker_task = None
+                await self._finalize_speakers(session)
                 await self._send_analysis(session, force=True)
-                await self._send_summary(session)
+                await self._send_summary(session, force=True)
                 await asyncio.sleep(0.05)
                 await self._close_socket(session, code=1000, reason="finalized")
         except asyncio.CancelledError:
@@ -179,30 +213,104 @@ class SessionManager:
 
     async def _start_asr_stream(self, session: MeetingSession) -> None:
         try:
-            session.asr_stream = self._asr_client.create_pcm_stream(
+            session.asr_stream = session.asr_client.create_pcm_stream(
                 on_segment=lambda segment: self._handle_segment(session, segment),
                 on_error=lambda message: self._handle_asr_error(session, message),
             )
             await session.asr_stream.start()
         except RuntimeError as exc:
-            logger.exception("Starting ASR stream failed for %s", session.session_id)
-            await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
+            fallback = self._asr_provider_service.resolve_fallback(session.active_provider)
+            if fallback is None:
+                logger.exception("Starting ASR stream failed for %s via %s", session.session_id, session.active_provider)
+                await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
+                return
+            logger.warning(
+                "Starting ASR stream failed for %s via %s. Retrying with %s.",
+                session.session_id,
+                session.active_provider,
+                fallback.provider_name,
+            )
+            self._apply_asr_selection(session, fallback)
+            try:
+                session.asr_stream = session.asr_client.create_pcm_stream(
+                    on_segment=lambda segment: self._handle_segment(session, segment),
+                    on_error=lambda message: self._handle_asr_error(session, message),
+                )
+                await session.asr_stream.start()
+            except RuntimeError as fallback_exc:
+                logger.exception(
+                    "Starting fallback ASR stream failed for %s via %s",
+                    session.session_id,
+                    session.active_provider,
+                )
+                await self._handle_asr_error(session, str(fallback_exc).strip() or fallback_exc.__class__.__name__)
 
-    async def _handle_segment(self, session: MeetingSession, segment) -> None:
+    async def _handle_segment(self, session: MeetingSession, segment: TranscriptSegment) -> None:
+        transcript_is_final = getattr(segment, "transcript_is_final", True)
+        speaker = getattr(segment, "speaker", None)
+        speaker_is_final = getattr(
+            segment,
+            "speaker_is_final",
+            session.active_provider == "volcengine" and transcript_is_final,
+        )
+
+        if not transcript_is_final:
+            if session.active_partial_transcript_index is None:
+                transcript = self._speaker_service.assign_speaker(
+                    segment,
+                    transcript_index=session.transcript_count,
+                    speaker=speaker,
+                    speaker_is_final=speaker_is_final,
+                    transcript_is_final=False,
+                )
+                session.transcripts.append(transcript)
+                session.active_partial_transcript_index = session.transcript_count
+                session.transcript_count += 1
+                await self._send_transcript(session, transcript)
+                return
+
+            transcript_index = session.active_partial_transcript_index
+            updated = self._speaker_service.update_transcript(
+                session.transcripts[transcript_index],
+                text=segment.text,
+                start=segment.start,
+                end=segment.end,
+                speaker=speaker or session.transcripts[transcript_index].speaker,
+                speaker_is_final=speaker_is_final,
+                transcript_is_final=False,
+            )
+            session.transcripts[transcript_index] = updated
+            await self._send_transcript_update(session, updated)
+            return
+
+        if session.active_partial_transcript_index is not None:
+            transcript_index = session.active_partial_transcript_index
+            updated = self._speaker_service.update_transcript(
+                session.transcripts[transcript_index],
+                text=segment.text,
+                start=segment.start,
+                end=segment.end,
+                speaker=speaker or session.transcripts[transcript_index].speaker,
+                speaker_is_final=speaker_is_final,
+                transcript_is_final=True,
+            )
+            session.transcripts[transcript_index] = updated
+            session.active_partial_transcript_index = None
+            await self._send_transcript_update(session, updated)
+            await self._postprocess_final_transcript(session, updated)
+            return
+
         transcript = self._speaker_service.assign_speaker(
             segment,
             transcript_index=session.transcript_count,
+            speaker=speaker,
+            speaker_is_final=speaker_is_final,
+            transcript_is_final=True,
         )
         session.transcripts.append(transcript)
         session.transcript_count += 1
-        transcript_index = session.transcript_count - 1
         await self._send_transcript(session, transcript)
-        if session.translation_worker_task is not None and session.target_lang:
-            await session.translation_queue.put((transcript_index, transcript.text))
-        if session.transcript_count % 3 == 0:
-            await self._send_analysis(session)
-        if session.transcript_count % self._settings.summary_interval == 0:
-            await self._send_summary(session)
+        await self._postprocess_final_transcript(session, transcript)
 
     async def _handle_asr_error(self, session: MeetingSession, message: str) -> None:
         session.transcription_blocked = True
@@ -280,6 +388,32 @@ class SessionManager:
             ),
         )
 
+    async def _send_transcript_update(
+        self,
+        session: MeetingSession,
+        transcript: TranscriptItem,
+    ) -> None:
+        await self._send_message(
+            session,
+            WebSocketMessage(
+                type=WebSocketMessageType.TRANSCRIPT_UPDATE,
+                data=transcript.model_dump(),
+            ),
+        )
+
+    async def _send_speaker_update(
+        self,
+        session: MeetingSession,
+        update: SpeakerUpdate,
+    ) -> None:
+        await self._send_message(
+            session,
+            WebSocketMessage(
+                type=WebSocketMessageType.SPEAKER_UPDATE,
+                data=update.model_dump(),
+            ),
+        )
+
     async def _send_summary(self, session: MeetingSession, *, force: bool = False) -> None:
         if not session.transcripts:
             return
@@ -325,6 +459,36 @@ class SessionManager:
         finally:
             session.analysis_in_progress = False
 
+    def _schedule_analysis(self, session: MeetingSession) -> None:
+        if session.finalizing:
+            return
+        if session.analysis_in_progress:
+            return
+        if session.analysis_task is not None and not session.analysis_task.done():
+            return
+        if session.last_analysis_transcript_count == session.transcript_count:
+            return
+
+        async def run_analysis() -> None:
+            try:
+                await self._send_analysis(session)
+            except Exception:
+                logger.exception("Background analysis task failed for %s", session.session_id)
+            finally:
+                session.analysis_task = None
+
+        session.analysis_task = asyncio.create_task(run_analysis())
+
+    async def _postprocess_final_transcript(
+        self,
+        session: MeetingSession,
+        transcript: TranscriptItem,
+    ) -> None:
+        if session.translation_worker_task is not None and session.target_lang:
+            await session.translation_queue.put((transcript.transcript_index, transcript.text))
+        if session.transcript_count % 3 == 0:
+            self._schedule_analysis(session)
+
     async def _send_error(self, session: MeetingSession, message: str) -> None:
         await self._send_message(
             session,
@@ -358,3 +522,91 @@ class SessionManager:
                 await session.websocket.close(code=code, reason=reason)
             except RuntimeError:
                 logger.warning("WebSocket close skipped because the connection is already closed.")
+
+    async def _finalize_speakers(self, session: MeetingSession) -> None:
+        if not session.should_run_diarization:
+            self._close_session_audio_writer(session)
+            return
+        if not session.transcripts:
+            self._close_session_audio_writer(session)
+            return
+
+        self._close_session_audio_writer(session)
+        if session.session_audio_path is None:
+            return
+
+        diarization_result = await self._diarization_service.diarize_audio_file(session.session_audio_path)
+        if not diarization_result.succeeded:
+            return
+
+        session.transcripts = self._diarization_service.assign_speakers(
+            session.transcripts,
+            diarization_result.turns,
+            speaker_is_final=True,
+        )
+        for transcript in session.transcripts:
+            await self._send_speaker_update(
+                session,
+                SpeakerUpdate(
+                    transcript_index=transcript.transcript_index,
+                    speaker=transcript.speaker,
+                    speaker_is_final=transcript.speaker_is_final,
+                ),
+            )
+
+    def _apply_asr_selection(self, session: MeetingSession, selection: ASRProviderSelection) -> None:
+        session.active_provider = selection.provider_name
+        session.asr_client = selection.client
+        session.should_run_diarization = selection.should_run_diarization
+        if session.should_run_diarization:
+            self._open_session_audio_writer(session)
+        else:
+            self._close_session_audio_writer(session)
+            if session.session_audio_path is not None:
+                session.session_audio_path.unlink(missing_ok=True)
+                session.session_audio_path = None
+
+    def _open_session_audio_writer(self, session: MeetingSession) -> None:
+        if not session.should_run_diarization or session.session_audio_writer is not None:
+            return
+        try:
+            file_descriptor, file_path = tempfile.mkstemp(
+                prefix=f"meeting-{session.session_id}-",
+                suffix=".wav",
+            )
+            os.close(file_descriptor)
+            audio_writer = wave.open(file_path, "wb")
+            audio_writer.setnchannels(self._settings.audio_channels)
+            audio_writer.setsampwidth(2)
+            audio_writer.setframerate(self._settings.sample_rate)
+            session.session_audio_path = Path(file_path)
+            session.session_audio_writer = audio_writer
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize session audio capture for diarization; continuing without it: %s",
+                exc,
+            )
+            session.session_audio_path = None
+            session.session_audio_writer = None
+
+    def _persist_session_audio(self, session: MeetingSession, payload: bytes) -> None:
+        if session.session_audio_writer is None or not payload:
+            return
+        try:
+            session.session_audio_writer.writeframes(payload)
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist session audio for diarization; continuing without it: %s",
+                exc,
+            )
+            self._close_session_audio_writer(session)
+
+    def _close_session_audio_writer(self, session: MeetingSession) -> None:
+        if session.session_audio_writer is None:
+            return
+        try:
+            session.session_audio_writer.close()
+        except Exception as exc:
+            logger.warning("Closing session audio writer failed: %s", exc)
+        finally:
+            session.session_audio_writer = None
