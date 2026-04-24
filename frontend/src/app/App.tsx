@@ -4,11 +4,12 @@ import { TranscriptPanel } from './components/TranscriptPanel';
 import { SummaryPanel } from './components/SummaryPanel';
 import { ActionItemsPanel } from './components/ActionItemsPanel';
 import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
+import { ASRProviderControls } from './components/ASRProviderControls';
 import { TranslationControls } from './components/TranslationControls';
 import { SceneControls } from './components/SceneControls';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAudioRecording } from '../hooks/useAudioRecording';
-import type { TranscriptItem, MeetingAnalysis, MeetingSummary, TranslationTargetLanguage } from '../types';
+import type { ASRProvider, TranscriptItem, MeetingAnalysis, MeetingSummary, TranslationTargetLanguage } from '../types';
 
 interface DisplayTranscriptItem extends TranscriptItem {
   id: string; // for React key
@@ -27,6 +28,7 @@ export default function App() {
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState<TranslationTargetLanguage>('en');
+  const [currentProvider, setCurrentProvider] = useState<ASRProvider>('volcengine');
 
   // Meeting State
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
@@ -39,6 +41,32 @@ export default function App() {
   const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
     onTranscript: (data) => {
       setTranscripts((prev) => [...prev, { ...data, id: Math.random().toString() }]);
+    },
+    onTranscriptUpdate: (data) => {
+      setTranscripts((prev) => {
+        const next = [...prev];
+        const item = next[data.transcript_index];
+        if (item) {
+          item.text = data.text;
+          item.start = data.start;
+          item.end = data.end;
+          item.speaker = data.speaker;
+          item.speaker_is_final = data.speaker_is_final;
+          item.transcript_is_final = data.transcript_is_final;
+        }
+        return next;
+      });
+    },
+    onSpeakerUpdate: (data) => {
+      setTranscripts((prev) => {
+        const next = [...prev];
+        const item = next[data.transcript_index];
+        if (item) {
+          item.speaker = data.speaker;
+          item.speaker_is_final = data.speaker_is_final;
+        }
+        return next;
+      });
     },
     onTranslation: (data) => {
       setTranscripts((prev) => {
@@ -99,16 +127,16 @@ export default function App() {
     }
   });
 
-  const buildWebSocketUrl = (scene: string, targetLang: string) => {
+  const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider) => {
     // Modify based on your backend config. Assuming Vite proxy or localhost:8080 fallback.
     const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || `ws://localhost:8080`;
     const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
-    return `${normalizedBaseUrl}/ws/meeting?scene=${scene}&target_lang=${targetLang}`;
+    return `${normalizedBaseUrl}/ws/meeting?scene=${scene}&target_lang=${targetLang}&provider=${provider}`;
   };
 
   const handleStartRecording = async () => {
     try {
-      const wsUrl = buildWebSocketUrl(currentScene, currentLanguage);
+      const wsUrl = buildWebSocketUrl(currentScene, currentLanguage, currentProvider);
       setIsStarting(true);
       setServerError('');
       setTranscripts([]);
@@ -183,6 +211,10 @@ export default function App() {
 
           {/* Recording Controls */}
           <div className="flex items-center gap-3">
+            <ASRProviderControls
+              currentProvider={currentProvider}
+              onProviderChange={setCurrentProvider}
+            />
             <SceneControls
               currentScene={currentScene}
               onSceneChange={setCurrentScene}

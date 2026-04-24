@@ -3,7 +3,10 @@ import type { TranslationTargetLanguage } from '../../types';
 
 interface DisplayTranscriptItem {
   id: string; // for React key
+  transcript_index: number;
   speaker: string;
+  speaker_is_final: boolean;
+  transcript_is_final: boolean;
   text: string;
   start: number;
   end: number;
@@ -30,7 +33,8 @@ const speakerColorCache: Record<string, string> = {
   'Speaker 0': 'bg-blue-100 text-blue-700 border-blue-200',
   'Speaker 1': 'bg-green-100 text-green-700 border-green-200',
   'Speaker 2': 'bg-purple-100 text-purple-700 border-purple-200',
-  'Speaker 3': 'bg-orange-100 text-orange-700 border-orange-200'
+  'Speaker 3': 'bg-orange-100 text-orange-700 border-orange-200',
+  Unknown: 'bg-gray-100 text-gray-500 border-gray-200'
 };
 
 const defaultColors = [
@@ -58,7 +62,11 @@ export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: T
   
   // Calculate unique speakers for stats
   const safeTranscripts = transcripts || [];
-  const uniqueSpeakers = new Set(safeTranscripts.map(t => t.speaker)).size;
+  const uniqueSpeakers = new Set(
+    safeTranscripts
+      .filter((t) => t.speaker_is_final && t.speaker !== 'Unknown')
+      .map((t) => t.speaker)
+  ).size;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200">
@@ -94,7 +102,19 @@ export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: T
             {/* Message Content */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-sm text-gray-900">{entry.speaker}</span>
+                <span className={`text-sm ${entry.speaker_is_final ? 'text-gray-900' : 'text-gray-500'}`}>
+                  {entry.speaker}
+                </span>
+                {!entry.speaker_is_final && (
+                  <span className="text-xs px-2 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200">
+                    Identifying...
+                  </span>
+                )}
+                {!entry.transcript_is_final && (
+                  <span className="text-xs px-2 py-0.5 rounded border bg-blue-50 text-blue-600 border-blue-200">
+                    Listening...
+                  </span>
+                )}
                 <span className="text-xs text-gray-400 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {formatTime(entry.start)}
@@ -113,7 +133,9 @@ export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: T
               </div>
 
               <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                <p className="text-sm text-gray-700 leading-relaxed">{entry.text}</p>
+                <p className={`text-sm leading-relaxed ${entry.transcript_is_final ? 'text-gray-700' : 'text-gray-500 italic'}`}>
+                  {entry.text}
+                </p>
 
                 {showTranslation && entry.translatedText && (
                   <div className="mt-2 pt-2 border-t border-gray-200">

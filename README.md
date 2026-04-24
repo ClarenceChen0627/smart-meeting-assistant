@@ -17,8 +17,11 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 ### Realtime pipeline
 
 - Browser microphone capture
-- Realtime ASR with DashScope Paraformer (`paraformer-realtime-v1`)
-- Realtime transcript rendering
+- Switchable live ASR providers:
+  - Volcengine Doubao ASR (default)
+  - DashScope Paraformer (`paraformer-realtime-v1`)
+- Realtime transcript rendering with provisional `Unknown` speaker labels
+- Offline speaker diarization on `finalize`, with speaker updates streamed back to the frontend
 - Real-time transcript translation to a target language, currently supporting 10 languages including:
   - English, Spanish, French, German, Chinese
   - Japanese, Korean, Portuguese, Arabic, Hindi
@@ -60,6 +63,7 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 - `POST /api/transcribe/batch`
 
 Uploaded audio is normalized with `ffmpeg` before being transcribed.
+When offline diarization is enabled, uploaded files also return final speaker labels.
 
 ## Project Structure
 
@@ -110,7 +114,7 @@ smart-meeting-assistant/
 5. The backend translates transcript text and emits `translation` messages.
 6. The backend periodically analyzes emotional dynamics and emits `analysis` messages.
 7. When recording stops, the frontend sends `finalize`.
-8. The backend finishes ASR, sends the final `analysis`, sends the final `summary`, then closes the socket.
+8. The backend closes the session WAV, runs offline speaker diarization, emits `speaker_update` messages, sends the final `analysis`, sends the final `summary`, then closes the socket.
 
 ## Requirements
 
@@ -118,6 +122,7 @@ smart-meeting-assistant/
 - Python 3.10+
 - ffmpeg
 - A valid DashScope API key
+- Optional: a Hugging Face access token for offline speaker diarization
 
 ## Environment Variables
 
@@ -140,10 +145,19 @@ DASHSCOPE_API_KEY=your-dashscope-api-key
 DASHSCOPE_MODEL=qwen-plus
 DASHSCOPE_ASR_MODEL=paraformer-realtime-v1
 DASHSCOPE_TRANSLATION_MODEL=qwen-mt-flash
+DEFAULT_ASR_PROVIDER=volcengine
+VOLCENGINE_ASR_APP_KEY=your-volcengine-app-key
+VOLCENGINE_ASR_ACCESS_KEY=your-volcengine-access-key
+VOLCENGINE_ASR_RESOURCE_ID=volc.seedasr.sauc.duration
+VOLCENGINE_ASR_WS_URL=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
+VOLCENGINE_ASR_NOSTREAM_WS_URL=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream
+VOLCENGINE_ASR_SSD_VERSION=200
+DIARIZATION_MODE=disabled
+DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
+HUGGINGFACE_TOKEN=
 
 PORT=8080
 LOG_LEVEL=INFO
-SUMMARY_INTERVAL=10
 FFMPEG_BINARY=ffmpeg
 AUDIO_SAMPLE_RATE=16000
 AUDIO_CHANNELS=1
@@ -155,8 +169,19 @@ AUDIO_CHANNELS=1
 - `DASHSCOPE_MODEL`: used by summary and meeting analysis
 - `DASHSCOPE_ASR_MODEL`: realtime ASR model
 - `DASHSCOPE_TRANSLATION_MODEL`: transcript translation model
-- `SUMMARY_INTERVAL`: transcript count threshold for interim summary generation
+- `DEFAULT_ASR_PROVIDER`: default ASR provider (`volcengine` or `dashscope`)
+- `VOLCENGINE_ASR_APP_KEY`: Volcengine speech APP ID used by `X-Api-App-Key`
+- `VOLCENGINE_ASR_ACCESS_KEY`: Volcengine speech access token used by `X-Api-Access-Key`
+- `VOLCENGINE_ASR_RESOURCE_ID`: Volcengine speech resource ID, e.g. `volc.seedasr.sauc.duration`
+- `VOLCENGINE_ASR_WS_URL`: Volcengine streaming ASR websocket endpoint
+- `VOLCENGINE_ASR_NOSTREAM_WS_URL`: Volcengine nostream websocket endpoint used for upload transcription
+- `VOLCENGINE_ASR_SSD_VERSION`: Volcengine SSD version required for native speaker clustering
+- `DIARIZATION_MODE`: set to `offline` to enable finalize-time speaker diarization
+- `DIARIZATION_MODEL`: offline diarization model name
+- `HUGGINGFACE_TOKEN`: Hugging Face token used to download the diarization model
 - `FFMPEG_BINARY`: ffmpeg binary path for upload transcription endpoints
+
+If diarization is disabled or unavailable, the backend still starts and serves requests. Speaker labels remain `Unknown` instead of failing the session.
 
 ### Optional advanced variables
 
@@ -274,6 +299,7 @@ Connection examples:
 ws://localhost:8080/ws/meeting?scene=general&target_lang=en
 ws://localhost:8080/ws/meeting?scene=finance&target_lang=zh
 ws://localhost:8080/ws/meeting?scene=hr&target_lang=ja
+ws://localhost:8080/ws/meeting?scene=general&target_lang=en&provider=volcengine
 ```
 
 Supported websocket event types:
@@ -284,10 +310,43 @@ Supported websocket event types:
 {
   "type": "transcript",
   "data": {
-    "speaker": "Speaker_A",
+    "transcript_index": 0,
+    "speaker": "Unknown",
+    "speaker_is_final": false,
+    "transcript_is_final": false,
     "text": "Meeting content",
     "start": 0.0,
     "end": 1.5
+  }
+}
+```
+
+#### `transcript_update`
+
+```json
+{
+  "type": "transcript_update",
+  "data": {
+    "transcript_index": 0,
+    "speaker": "Speaker 1",
+    "speaker_is_final": true,
+    "transcript_is_final": true,
+    "text": "Meeting content",
+    "start": 0.0,
+    "end": 1.5
+  }
+}
+```
+
+#### `speaker_update`
+
+```json
+{
+  "type": "speaker_update",
+  "data": {
+    "transcript_index": 0,
+    "speaker": "Speaker 1",
+    "speaker_is_final": true
   }
 }
 ```
@@ -391,7 +450,9 @@ Supported websocket event types:
 
 ## Current Limitations
 
-- `speaker` assignment is still placeholder logic, not true diarization
+- Speaker diarization is currently offline-only and runs after `finalize`, not during live capture
+- Volcengine native speaker clustering currently applies only to the ASR provider path; translation / summary / analysis still run on DashScope
+- Summary is now generated only after `finalize`; it is no longer refreshed during the meeting
 - Realtime ASR can still misrecognize technical terms and English words
 - Summary combines model output with lightweight rule augmentation
 - Meeting analysis combines model output with lightweight rule fallback for obvious Chinese emotional signals

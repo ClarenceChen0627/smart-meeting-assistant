@@ -4,24 +4,74 @@ from app.schemas.transcript import TranscriptItem, TranscriptSegment
 
 
 class SpeakerService:
+    UNKNOWN_SPEAKER = "Unknown"
+
     def assign_speaker(
         self,
         segment: TranscriptSegment,
         *,
         transcript_index: int,
+        speaker: str | None = None,
+        speaker_is_final: bool = False,
+        transcript_is_final: bool = True,
     ) -> TranscriptItem:
         return TranscriptItem(
-            speaker=self._resolve_speaker(segment.start, transcript_index),
+            transcript_index=transcript_index,
+            speaker=self._normalize_speaker(speaker),
+            speaker_is_final=speaker_is_final,
+            transcript_is_final=transcript_is_final,
             text=segment.text,
             start=segment.start,
             end=segment.end,
         )
 
-    def _resolve_speaker(self, begin_time: float, transcript_index: int) -> str:
-        if begin_time < 10:
-            return "Speaker_A"
-        if begin_time < 20:
-            return "Speaker_B"
-        if begin_time < 30:
-            return "Speaker_A"
-        return "Speaker_A" if transcript_index % 2 == 0 else "Speaker_B"
+    def create_empty_transcript(self) -> TranscriptItem:
+        return TranscriptItem(
+            transcript_index=0,
+            speaker=self.UNKNOWN_SPEAKER,
+            speaker_is_final=False,
+            transcript_is_final=True,
+            text="",
+            start=0.0,
+            end=0.0,
+        )
+
+    def update_speaker(
+        self,
+        transcript: TranscriptItem,
+        *,
+        speaker: str,
+        speaker_is_final: bool,
+    ) -> TranscriptItem:
+        return transcript.model_copy(
+            update={
+                "speaker": self._normalize_speaker(speaker),
+                "speaker_is_final": speaker_is_final,
+            }
+        )
+
+    def update_transcript(
+        self,
+        transcript: TranscriptItem,
+        *,
+        text: str,
+        start: float,
+        end: float,
+        speaker: str,
+        speaker_is_final: bool,
+        transcript_is_final: bool,
+    ) -> TranscriptItem:
+        return transcript.model_copy(
+            update={
+                "text": text,
+                "start": start,
+                "end": end,
+                "speaker": self._normalize_speaker(speaker),
+                "speaker_is_final": speaker_is_final,
+                "transcript_is_final": transcript_is_final,
+            }
+        )
+
+    def _normalize_speaker(self, speaker: str | None) -> str:
+        normalized = (speaker or "").strip()
+        return normalized or self.UNKNOWN_SPEAKER

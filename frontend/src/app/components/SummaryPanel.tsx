@@ -36,6 +36,7 @@ const getParticipants = (transcripts: TranscriptItem[] = []) => {
   const participants = Array.from(
     new Set(
       transcripts
+        .filter((item) => item.speaker_is_final && item.speaker !== 'Unknown')
         .map((item) => item.speaker?.trim())
         .filter((speaker): speaker is string => Boolean(speaker))
     )

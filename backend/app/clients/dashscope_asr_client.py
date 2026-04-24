@@ -3,28 +3,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from app.clients.asr_base import (
+    ASRClient,
+    ASRStream,
+    ErrorHandler,
+    SegmentHandler,
+    noop_error_handler,
+    noop_segment_handler,
+)
 from app.core.config import Settings
 from app.schemas.transcript import TranscriptSegment
 
 logger = logging.getLogger(__name__)
-
-SegmentHandler = Callable[[TranscriptSegment], Awaitable[None]]
-ErrorHandler = Callable[[str], Awaitable[None]]
-
-
-async def _noop_segment_handler(_: TranscriptSegment) -> None:
-    return
-
-
-async def _noop_error_handler(_: str) -> None:
-    return
 
 
 def _format_exception_message(exc: Exception) -> str:
@@ -32,15 +28,15 @@ def _format_exception_message(exc: Exception) -> str:
     return message
 
 
-class DashScopeASRStream:
+class DashScopeASRStream(ASRStream):
     def __init__(
         self,
         *,
         settings: Settings,
         audio_format: str,
         sample_rate: int,
-        on_segment: SegmentHandler = _noop_segment_handler,
-        on_error: ErrorHandler = _noop_error_handler,
+        on_segment: SegmentHandler = noop_segment_handler,
+        on_error: ErrorHandler = noop_error_handler,
     ) -> None:
         self._settings = settings
         self._audio_format = audio_format
@@ -262,7 +258,9 @@ class DashScopeASRStream:
             await self._on_error(self._error_message)
 
 
-class DashScopeASRClient:
+class DashScopeASRClient(ASRClient):
+    provider_name = "dashscope"
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
@@ -276,8 +274,8 @@ class DashScopeASRClient:
     def create_pcm_stream(
         self,
         *,
-        on_segment: SegmentHandler = _noop_segment_handler,
-        on_error: ErrorHandler = _noop_error_handler,
+        on_segment: SegmentHandler = noop_segment_handler,
+        on_error: ErrorHandler = noop_error_handler,
     ) -> DashScopeASRStream:
         return DashScopeASRStream(
             settings=self._settings,

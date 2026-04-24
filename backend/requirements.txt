@@ -5,3 +5,4 @@ pydantic==2.6.0
 httpx==0.26.0
 python-dotenv==1.0.1
 websockets==16.0
+pyannote.audio==4.0.4

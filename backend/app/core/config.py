@@ -31,10 +31,10 @@ class Settings:
     service_name: str = "Smart Meeting Assistant Backend"
     service_version: str = "2.0.0"
 
-    summary_interval: int = int(os.getenv("SUMMARY_INTERVAL", "10"))
     ffmpeg_binary: str = os.getenv("FFMPEG_BINARY", "ffmpeg")
     sample_rate: int = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
     audio_channels: int = int(os.getenv("AUDIO_CHANNELS", "1"))
+    default_asr_provider: str = os.getenv("DEFAULT_ASR_PROVIDER", "volcengine").strip().lower() or "volcengine"
 
     aliyun_asr_app_key: str = os.getenv("ALIYUN_ASR_APP_KEY", "")
     aliyun_nls_token: str = os.getenv("ALIYUN_NLS_TOKEN", "")
@@ -49,6 +49,22 @@ class Settings:
         "https://nls-meta.cn-shanghai.aliyuncs.com/",
     )
     aliyun_region_id: str = os.getenv("ALIYUN_REGION_ID", "cn-shanghai")
+
+    volcengine_asr_app_key: str = os.getenv("VOLCENGINE_ASR_APP_KEY", "")
+    volcengine_asr_access_key: str = os.getenv("VOLCENGINE_ASR_ACCESS_KEY", "")
+    volcengine_asr_resource_id: str = os.getenv(
+        "VOLCENGINE_ASR_RESOURCE_ID",
+        "volc.seedasr.sauc.duration",
+    )
+    volcengine_asr_ws_url: str = os.getenv(
+        "VOLCENGINE_ASR_WS_URL",
+        "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async",
+    )
+    volcengine_asr_nostream_ws_url: str = os.getenv(
+        "VOLCENGINE_ASR_NOSTREAM_WS_URL",
+        "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream",
+    )
+    volcengine_asr_ssd_version: str = os.getenv("VOLCENGINE_ASR_SSD_VERSION", "200")
 
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     dashscope_model: str = os.getenv("DASHSCOPE_MODEL", "qwen-plus")
@@ -66,14 +82,32 @@ class Settings:
         "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
     )
     dashscope_workspace_id: str = os.getenv("DASHSCOPE_WORKSPACE_ID", "")
+    diarization_mode: str = os.getenv("DIARIZATION_MODE", "disabled").strip().lower() or "disabled"
+    huggingface_token: str = os.getenv("HUGGINGFACE_TOKEN", "")
+    diarization_model: str = os.getenv(
+        "DIARIZATION_MODEL",
+        "pyannote/speaker-diarization-community-1",
+    )
 
     @property
     def asr_configured(self) -> bool:
         return bool(self.dashscope_api_key and self.dashscope_asr_model)
 
     @property
+    def dashscope_asr_configured(self) -> bool:
+        return bool(self.dashscope_api_key and self.dashscope_asr_model)
+
+    @property
+    def volcengine_asr_configured(self) -> bool:
+        return bool(self.volcengine_asr_app_key and self.volcengine_asr_access_key and self.volcengine_asr_resource_id)
+
+    @property
     def llm_configured(self) -> bool:
         return bool(self.dashscope_api_key)
+
+    @property
+    def diarization_enabled(self) -> bool:
+        return self.diarization_mode == "offline"
 
 
 settings = Settings()
