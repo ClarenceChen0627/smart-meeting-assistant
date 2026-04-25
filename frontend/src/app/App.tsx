@@ -1,18 +1,29 @@
-import { useState } from 'react';
-import { Play, Pause, Mic, MicOff, AlertCircle } from 'lucide-react';
-import { TranscriptPanel } from './components/TranscriptPanel';
-import { SummaryPanel } from './components/SummaryPanel';
+import { useEffect, useState } from 'react';
+import { AlertCircle, History, Mic, MicOff, Pause, Play, RotateCcw } from 'lucide-react';
+
 import { ActionItemsPanel } from './components/ActionItemsPanel';
-import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
 import { ASRProviderControls } from './components/ASRProviderControls';
-import { TranslationControls } from './components/TranslationControls';
+import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
+import { MeetingHistorySheet } from './components/MeetingHistorySheet';
 import { SceneControls } from './components/SceneControls';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { SummaryPanel } from './components/SummaryPanel';
+import { TranscriptPanel } from './components/TranscriptPanel';
+import { TranslationControls } from './components/TranslationControls';
 import { useAudioRecording } from '../hooks/useAudioRecording';
-import type { ASRProvider, TranscriptItem, MeetingAnalysis, MeetingSummary, TranslationTargetLanguage } from '../types';
+import { useWebSocket } from '../hooks/useWebSocket';
+import type {
+  ASRProvider,
+  MeetingAnalysis,
+  MeetingHistoryListItem,
+  MeetingHistoryTranscriptItem,
+  MeetingRecord,
+  MeetingSummary,
+  TranscriptItem,
+  TranslationTargetLanguage,
+} from '../types';
 
 interface DisplayTranscriptItem extends TranscriptItem {
-  id: string; // for React key
+  id: string;
   translatedText?: string;
   translatedTargetLang?: TranslationTargetLanguage;
   analysisSignal?: string;
@@ -20,8 +31,74 @@ interface DisplayTranscriptItem extends TranscriptItem {
   analysisSeverity?: 'low' | 'medium' | 'high';
 }
 
+const buildApiBaseUrl = () => {
+  const explicitBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (explicitBaseUrl) {
+    return explicitBaseUrl.replace(/\/+$/, '');
+  }
+
+  const webSocketBaseUrl = import.meta.env.VITE_WS_BASE_URL?.trim();
+  if (webSocketBaseUrl) {
+    return webSocketBaseUrl.replace(/^ws/i, 'http').replace(/\/+$/, '');
+  }
+
+  return 'http://localhost:8080';
+};
+
+const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider) => {
+  const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || 'ws://localhost:8080';
+  return `${baseUrl.replace(/\/+$/, '')}/ws/meeting?scene=${scene}&target_lang=${targetLang}&provider=${provider}`;
+};
+
+const decorateTranscriptsWithAnalysis = (
+  transcripts: DisplayTranscriptItem[],
+  analysis: MeetingAnalysis | null
+) => {
+  const next = transcripts.map((item) => ({
+    ...item,
+    analysisSignal: undefined,
+    analysisReason: undefined,
+    analysisSeverity: undefined,
+  }));
+
+  if (!analysis) {
+    return next;
+  }
+
+  analysis.highlights.forEach((highlight) => {
+    const item = next.find((entry) => entry.transcript_index === highlight.transcript_index);
+    if (!item) {
+      return;
+    }
+    item.analysisSignal = highlight.signal;
+    item.analysisReason = highlight.reason;
+    item.analysisSeverity = highlight.severity;
+  });
+
+  return next;
+};
+
+const toDisplayTranscript = (
+  transcript: MeetingHistoryTranscriptItem,
+  prefix: 'history' | 'live'
+): DisplayTranscriptItem => ({
+  ...transcript,
+  id: `${prefix}-${transcript.transcript_index}`,
+  translatedText: transcript.translated_text ?? undefined,
+  translatedTargetLang: transcript.translated_target_lang ?? undefined,
+});
+
+const formatHistoryTimestamp = (value: string) =>
+  new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'analysis'>('transcript');
+  const [viewMode, setViewMode] = useState<'live' | 'history'>('live');
   const [currentScene, setCurrentScene] = useState<string>('general');
   const [isRecording, setIsRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -29,80 +106,100 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState<TranslationTargetLanguage>('en');
   const [currentProvider, setCurrentProvider] = useState<ASRProvider>('volcengine');
+  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
 
-  // Meeting State
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
 
+  const [historyList, setHistoryList] = useState<MeetingHistoryListItem[]>([]);
+  const [selectedHistoryMeeting, setSelectedHistoryMeeting] = useState<MeetingRecord | null>(null);
+  const [isHistorySheetOpen, setIsHistorySheetOpen] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [loadingMeetingId, setLoadingMeetingId] = useState<string | null>(null);
+  const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
+
   const [statusMessage, setStatusMessage] = useState('Ready to start meeting');
   const [serverError, setServerError] = useState('');
 
+  const resetLiveSessionState = () => {
+    setCurrentMeetingId(null);
+    setTranscripts([]);
+    setAnalysis(null);
+    setSummary(null);
+  };
+
+  const loadHistoryList = async () => {
+    try {
+      setIsHistoryLoading(true);
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings`);
+      if (!response.ok) {
+        throw new Error(`Failed to load meeting history (${response.status})`);
+      }
+      const payload = await response.json() as MeetingHistoryListItem[];
+      setHistoryList(payload);
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : 'Failed to load meeting history');
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadHistoryList();
+  }, []);
+
   const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
+    onSessionStarted: (data) => {
+      setCurrentMeetingId(data.meeting_id);
+      setServerError('');
+      void loadHistoryList();
+    },
     onTranscript: (data) => {
-      setTranscripts((prev) => [...prev, { ...data, id: Math.random().toString() }]);
+      setTranscripts((prev) => {
+        const existing = prev.find((item) => item.transcript_index === data.transcript_index);
+        if (existing) {
+          return prev.map((item) =>
+            item.transcript_index === data.transcript_index
+              ? { ...item, ...data }
+              : item
+          );
+        }
+        return [...prev, { ...data, id: `live-${data.transcript_index}` }];
+      });
     },
     onTranscriptUpdate: (data) => {
-      setTranscripts((prev) => {
-        const next = [...prev];
-        const item = next[data.transcript_index];
-        if (item) {
-          item.text = data.text;
-          item.start = data.start;
-          item.end = data.end;
-          item.speaker = data.speaker;
-          item.speaker_is_final = data.speaker_is_final;
-          item.transcript_is_final = data.transcript_is_final;
-        }
-        return next;
-      });
+      setTranscripts((prev) => prev.map((item) =>
+        item.transcript_index === data.transcript_index
+          ? { ...item, ...data }
+          : item
+      ));
     },
     onSpeakerUpdate: (data) => {
-      setTranscripts((prev) => {
-        const next = [...prev];
-        const item = next[data.transcript_index];
-        if (item) {
-          item.speaker = data.speaker;
-          item.speaker_is_final = data.speaker_is_final;
-        }
-        return next;
-      });
+      setTranscripts((prev) => prev.map((item) =>
+        item.transcript_index === data.transcript_index
+          ? { ...item, speaker: data.speaker, speaker_is_final: data.speaker_is_final }
+          : item
+      ));
     },
     onTranslation: (data) => {
-      setTranscripts((prev) => {
-        const next = [...prev];
-        const item = next[data.transcript_index];
-        if (item) {
-          item.translatedText = data.text;
-          item.translatedTargetLang = data.target_lang;
-        }
-        return next;
-      });
+      setTranscripts((prev) => prev.map((item) =>
+        item.transcript_index === data.transcript_index
+          ? {
+              ...item,
+              translatedText: data.text,
+              translatedTargetLang: data.target_lang,
+            }
+          : item
+      ));
     },
     onAnalysis: (data) => {
       setAnalysis(data);
-      setTranscripts((prev) => {
-        const next = [...prev];
-        // Clear previous highlights
-        next.forEach((item) => {
-          item.analysisSignal = undefined;
-          item.analysisReason = undefined;
-          item.analysisSeverity = undefined;
-        });
-        // Apply new highlights
-        data.highlights.forEach((highlight) => {
-          const transcript = next[highlight.transcript_index];
-          if (transcript) {
-            transcript.analysisSignal = highlight.signal;
-            transcript.analysisReason = highlight.reason;
-            transcript.analysisSeverity = highlight.severity;
-          }
-        });
-        return next;
-      });
+      setTranscripts((prev) => decorateTranscriptsWithAnalysis(prev, data));
     },
     onSummary: (data) => {
       setSummary(data);
+      void loadHistoryList();
     },
     onError: (message) => {
       setServerError(message);
@@ -119,7 +216,6 @@ export default function App() {
       }
     },
     onStatusChange: (status) => {
-      // you could append this to diagnostic logs
       console.log(status);
     },
     onError: (error) => {
@@ -127,28 +223,21 @@ export default function App() {
     }
   });
 
-  const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider) => {
-    // Modify based on your backend config. Assuming Vite proxy or localhost:8080 fallback.
-    const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || `ws://localhost:8080`;
-    const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
-    return `${normalizedBaseUrl}/ws/meeting?scene=${scene}&target_lang=${targetLang}&provider=${provider}`;
-  };
-
   const handleStartRecording = async () => {
     try {
-      const wsUrl = buildWebSocketUrl(currentScene, currentLanguage, currentProvider);
       setIsStarting(true);
       setServerError('');
-      setTranscripts([]);
-      setAnalysis(null);
-      setSummary(null);
+      setViewMode('live');
+      setSelectedHistoryMeeting(null);
+      setActiveTab('transcript');
+      resetLiveSessionState();
 
-      await connect(wsUrl);
+      await connect(buildWebSocketUrl(currentScene, currentLanguage, currentProvider));
       await startAudio();
-      
+
       setIsRecording(true);
       setIsFinalizing(false);
-    } catch (e) {
+    } catch (error) {
       setServerError('Failed to start recording');
       disconnect();
     } finally {
@@ -162,27 +251,99 @@ export default function App() {
       setStatusMessage('Generating summary...');
       await stopAudio();
       setIsRecording(false);
-      
+
       if (isConnected) {
         await finalize();
       }
-    } catch (e) {
+    } catch (error) {
       setServerError('Failed to finalize session');
     } finally {
       setIsFinalizing(false);
-      disconnect();
+      disconnect({ preserveStatusMessage: true });
       setStatusMessage('Session finalized.');
+      void loadHistoryList();
     }
   };
 
   const toggleRecording = () => {
-    if (isStarting || isFinalizing) return;
+    if (isStarting || isFinalizing) {
+      return;
+    }
+
     if (isRecording) {
-      handleStopRecording();
-    } else {
-      handleStartRecording();
+      void handleStopRecording();
+      return;
+    }
+
+    void handleStartRecording();
+  };
+
+  const handleSelectHistoryMeeting = async (meetingId: string) => {
+    try {
+      setLoadingMeetingId(meetingId);
+      setServerError('');
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`);
+      if (!response.ok) {
+        throw new Error(`Failed to load meeting record (${response.status})`);
+      }
+
+      const payload = await response.json() as MeetingRecord;
+      setSelectedHistoryMeeting(payload);
+      setViewMode('history');
+      setIsHistorySheetOpen(false);
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : 'Failed to load meeting record');
+    } finally {
+      setLoadingMeetingId(null);
     }
   };
+
+  const handleDeleteHistoryMeeting = async (meetingId: string) => {
+    try {
+      setDeletingMeetingId(meetingId);
+      setServerError('');
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to delete meeting record (${response.status})`);
+      }
+
+      setHistoryList((prev) => prev.filter((meeting) => meeting.meeting_id !== meetingId));
+
+      if (selectedHistoryMeeting?.meeting_id === meetingId) {
+        setSelectedHistoryMeeting(null);
+        setViewMode('live');
+      }
+
+      if (currentMeetingId === meetingId) {
+        resetLiveSessionState();
+        setStatusMessage('Ready to start meeting');
+        setActiveTab('transcript');
+      }
+
+      void loadHistoryList();
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : 'Failed to delete meeting record');
+    } finally {
+      setDeletingMeetingId(null);
+    }
+  };
+
+  const displayedTranscripts = viewMode === 'history' && selectedHistoryMeeting
+    ? decorateTranscriptsWithAnalysis(
+        selectedHistoryMeeting.transcripts.map((item) => toDisplayTranscript(item, 'history')),
+        selectedHistoryMeeting.analysis
+      )
+    : transcripts;
+  const displayedSummary = viewMode === 'history' ? selectedHistoryMeeting?.summary ?? null : summary;
+  const displayedAnalysis = viewMode === 'history' ? selectedHistoryMeeting?.analysis ?? null : analysis;
+  const displayedLanguage = viewMode === 'history'
+    ? selectedHistoryMeeting?.target_lang ?? currentLanguage
+    : currentLanguage;
+  const displayedMeetingDate = viewMode === 'history' ? selectedHistoryMeeting?.created_at ?? null : null;
+  const isHistoryView = viewMode === 'history' && selectedHistoryMeeting !== null;
+  const canOpenHistory = !isRecording && !isStarting && !isFinalizing;
 
   const tabs = [
     { id: 'transcript', label: 'Live Transcript' },
@@ -193,9 +354,8 @@ export default function App() {
 
   return (
     <div className="size-full bg-gray-50 flex flex-col">
-      {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-6">
           <div>
             <h1 className="text-gray-900 mb-1">Smart Meeting Assistant</h1>
             <p className="text-sm text-gray-500">
@@ -209,8 +369,21 @@ export default function App() {
             )}
           </div>
 
-          {/* Recording Controls */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            <button
+              type="button"
+              onClick={() => setIsHistorySheetOpen(true)}
+              disabled={!canOpenHistory}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm ${
+                canOpenHistory
+                  ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              <History className="w-4 h-4" />
+              <span>History Meetings</span>
+            </button>
+
             <ASRProviderControls
               currentProvider={currentProvider}
               onProviderChange={setCurrentProvider}
@@ -268,13 +441,31 @@ export default function App() {
         </div>
       </div>
 
-      {/* Navigation Tabs */}
+      <MeetingHistorySheet
+        open={isHistorySheetOpen}
+        onOpenChange={setIsHistorySheetOpen}
+        meetings={historyList}
+        isLoading={isHistoryLoading}
+        selectedMeetingId={selectedHistoryMeeting?.meeting_id ?? null}
+        loadingMeetingId={loadingMeetingId}
+        deletingMeetingId={deletingMeetingId}
+        onSelect={(meetingId) => {
+          void handleSelectHistoryMeeting(meetingId);
+        }}
+        onDelete={(meetingId) => {
+          void handleDeleteHistoryMeeting(meetingId);
+        }}
+        onRefresh={() => {
+          void loadHistoryList();
+        }}
+      />
+
       <div className="bg-white border-b border-gray-200 px-6">
         <div className="flex gap-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as 'transcript' | 'summary' | 'actions' | 'analysis')}
               className={`px-6 py-3 text-sm transition-colors relative ${
                 activeTab === tab.id
                   ? 'text-blue-600'
@@ -290,19 +481,55 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main Content Area */}
       <div className="flex-1 overflow-auto">
-        <div className="p-6">
+        <div className="p-6 space-y-4">
+          {isHistoryView && selectedHistoryMeeting && (
+            <div className="max-w-7xl mx-auto rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-blue-900">Viewing saved meeting record</p>
+                <p className="text-sm text-blue-700">
+                  {selectedHistoryMeeting.status} meeting from {formatHistoryTimestamp(selectedHistoryMeeting.updated_at)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewMode('live')}
+                className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm text-blue-700 transition-colors hover:bg-blue-100"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Return to Live View</span>
+              </button>
+            </div>
+          )}
+
           {activeTab === 'transcript' && (
-            <TranscriptPanel 
-              isRecording={isRecording} 
-              currentLanguage={currentLanguage} 
-              transcripts={transcripts}
+            <TranscriptPanel
+              isRecording={isRecording && !isHistoryView}
+              currentLanguage={displayedLanguage}
+              transcripts={displayedTranscripts}
+              title={isHistoryView ? 'Meeting Transcript' : 'Live Transcript'}
+              description={isHistoryView ? 'Saved transcript, translations, and analysis highlights for this meeting.' : undefined}
+              emptyMessage={isHistoryView ? 'No transcript captured for this meeting.' : undefined}
+              showLiveBadge={!isHistoryView}
             />
           )}
-          {activeTab === 'summary' && <SummaryPanel summary={summary} transcripts={transcripts} />}
-          {activeTab === 'actions' && <ActionItemsPanel summary={summary} transcripts={transcripts} />}
-          {activeTab === 'analysis' && <MeetingAnalysisPanel analysis={analysis} transcripts={transcripts} />}
+          {activeTab === 'summary' && (
+            <SummaryPanel
+              summary={displayedSummary}
+              transcripts={displayedTranscripts}
+              meetingDate={displayedMeetingDate}
+            />
+          )}
+          {activeTab === 'actions' && (
+            <ActionItemsPanel
+              summary={displayedSummary}
+              transcripts={displayedTranscripts}
+              readOnly={isHistoryView}
+            />
+          )}
+          {activeTab === 'analysis' && (
+            <MeetingAnalysisPanel analysis={displayedAnalysis} transcripts={displayedTranscripts} />
+          )}
         </div>
       </div>
     </div>

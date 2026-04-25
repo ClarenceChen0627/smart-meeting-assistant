@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.meetings import router as meetings_router
 from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
 from app.clients.volcengine_asr_client import VolcengineTranscriptSegment
@@ -12,6 +13,7 @@ from app.schemas.analysis import MeetingAnalysis
 from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
+from app.services.meeting_history_service import MeetingHistoryService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 
@@ -70,6 +72,18 @@ class StubTranslationService:
         raise AssertionError("Translation should not be called in these tests")
 
 
+class StubConfiguredTranslationService:
+    is_configured = True
+
+    def normalize_target_lang(self, target_lang: str | None) -> str | None:
+        if target_lang is None:
+            return None
+        return target_lang.strip().lower() or None
+
+    async def translate_text(self, *, text: str, target_lang: str) -> str:
+        return f"[{target_lang}] {text}"
+
+
 class StubSummaryService:
     is_configured = True
 
@@ -105,6 +119,21 @@ class StubSentimentAnalysisService:
         return MeetingAnalysis.empty()
 
 
+class IncrementingSentimentAnalysisService:
+    is_configured = True
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+        self.call_count += 1
+        return MeetingAnalysis(
+            overall_sentiment="neutral",
+            engagement_level="medium",
+            engagement_summary=f"Analysis #{self.call_count}",
+        )
+
+
 class StubDiarizationService(DiarizationService):
     def __init__(self, speaker_service: SpeakerService, result: DiarizationResult) -> None:
         super().__init__(Settings(), speaker_service)
@@ -129,6 +158,66 @@ def build_segments() -> list[TranscriptSegment]:
         TranscriptSegment(text="Hello team", start=0.0, end=1.0),
         TranscriptSegment(text="Let's finalize the plan", start=1.2, end=2.4),
     ]
+
+
+def build_three_segments() -> list[TranscriptSegment]:
+    return [
+        TranscriptSegment(text="Hello team", start=0.0, end=1.0),
+        TranscriptSegment(text="Let's finalize the plan", start=1.2, end=2.4),
+        TranscriptSegment(text="I will send the update today", start=2.5, end=3.6),
+    ]
+
+
+def build_settings(tmp_path, **overrides) -> Settings:
+    return Settings(
+        meeting_history_db_path=str(tmp_path / "meeting_history.sqlite3"),
+        **overrides,
+    )
+
+
+def build_session_manager(
+    tmp_path,
+    *,
+    speaker_service: SpeakerService,
+    dashscope_client: StubASRClient,
+    volcengine_client: StubASRClient,
+    diarization_service: DiarizationService,
+    default_asr_provider: str,
+    diarization_mode: str,
+    summary_service=None,
+    sentiment_analysis_service=None,
+    translation_service=None,
+) -> tuple[Settings, SessionManager]:
+    settings = build_settings(
+        tmp_path,
+        default_asr_provider=default_asr_provider,
+        diarization_mode=diarization_mode,
+    )
+    return settings, SessionManager(
+        settings=settings,
+        asr_provider_service=ASRProviderService(
+            settings=settings,
+            dashscope_client=dashscope_client,
+            volcengine_client=volcengine_client,
+        ),
+        audio_codec_service=StubAudioCodecService(),
+        speaker_service=speaker_service,
+        diarization_service=diarization_service,
+        summary_service=summary_service or StubSummaryService(),
+        sentiment_analysis_service=sentiment_analysis_service or StubSentimentAnalysisService(),
+        translation_service=translation_service or StubTranslationService(),
+        meeting_history_service=MeetingHistoryService(settings.resolved_meeting_history_db_path),
+    )
+
+
+def receive_until(websocket, predicate, *, limit: int = 20) -> list[dict]:
+    messages = []
+    for _ in range(limit):
+        message = websocket.receive_json()
+        messages.append(message)
+        if predicate(messages):
+            return messages
+    raise AssertionError("Timed out waiting for expected websocket messages")
 
 
 def test_transcribe_batch_returns_final_diarized_speakers() -> None:
@@ -163,7 +252,7 @@ def test_transcribe_batch_returns_final_diarized_speakers() -> None:
     assert all(item["speaker_is_final"] is True for item in payload)
 
 
-def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_outputs() -> None:
+def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_outputs(tmp_path) -> None:
     speaker_service = SpeakerService()
     dashscope_client = StubASRClient("dashscope", build_segments())
     volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
@@ -172,24 +261,23 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
         DiarizationResult(succeeded=True, turns=build_turns()),
     )
     app = FastAPI()
+    app.include_router(meetings_router)
     app.include_router(websocket_router)
-    app.state.session_manager = SessionManager(
-        settings=Settings(default_asr_provider="dashscope", diarization_mode="offline"),
-        asr_provider_service=ASRProviderService(
-            settings=Settings(default_asr_provider="dashscope", diarization_mode="offline"),
-            dashscope_client=dashscope_client,
-            volcengine_client=volcengine_client,
-        ),
-        audio_codec_service=StubAudioCodecService(),
+    _, session_manager = build_session_manager(
+        tmp_path,
         speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
         diarization_service=diarization_service,
-        summary_service=StubSummaryService(),
-        sentiment_analysis_service=StubSentimentAnalysisService(),
-        translation_service=StubTranslationService(),
+        default_asr_provider="dashscope",
+        diarization_mode="offline",
     )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
 
     with TestClient(app) as client:
         with client.websocket_connect("/ws/meeting?scene=general") as websocket:
+            session_started = websocket.receive_json()
             websocket.send_bytes(b"\x00\x00" * 160)
             first = websocket.receive_json()
             websocket.send_bytes(b"\x00\x00" * 160)
@@ -201,6 +289,10 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
             fifth = websocket.receive_json()
             sixth = websocket.receive_json()
 
+        detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    assert session_started["type"] == "session_started"
+    assert session_started["data"]["status"] == "draft"
     assert first["type"] == "transcript"
     assert first["data"]["speaker"] == "Unknown"
     assert first["data"]["speaker_is_final"] is False
@@ -230,6 +322,13 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
     assert sixth["data"]["action_items"][0]["assignee"] == "Speaker 1"
     assert sixth["data"]["action_items"][0]["confidence"] == 0.82
     assert sixth["data"]["action_items"][0]["is_actionable"] is True
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["status"] == "finalized"
+    assert detail_payload["transcript_count"] == 2
+    assert detail_payload["summary"]["overview"].startswith("The team reviewed")
+    assert [item["speaker"] for item in detail_payload["transcripts"]] == ["Speaker 1", "Speaker 2"]
 
 
 def test_transcribe_batch_uses_native_volcengine_speaker_info_without_diarization() -> None:
@@ -279,7 +378,7 @@ def test_transcribe_batch_uses_native_volcengine_speaker_info_without_diarizatio
     assert all(item["speaker_is_final"] is True for item in payload)
 
 
-def test_websocket_volcengine_partial_transcript_is_updated_in_place() -> None:
+def test_websocket_volcengine_partial_transcript_is_updated_in_place(tmp_path) -> None:
     speaker_service = SpeakerService()
     partial_then_final_segments = [
         VolcengineTranscriptSegment(
@@ -303,26 +402,23 @@ def test_websocket_volcengine_partial_transcript_is_updated_in_place() -> None:
     volcengine_client = StubASRClient("volcengine", partial_then_final_segments)
     app = FastAPI()
     app.include_router(websocket_router)
-    app.state.session_manager = SessionManager(
-        settings=Settings(default_asr_provider="volcengine", diarization_mode="disabled"),
-        asr_provider_service=ASRProviderService(
-            settings=Settings(default_asr_provider="volcengine", diarization_mode="disabled"),
-            dashscope_client=dashscope_client,
-            volcengine_client=volcengine_client,
-        ),
-        audio_codec_service=StubAudioCodecService(),
+    _, session_manager = build_session_manager(
+        tmp_path,
         speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
         diarization_service=StubDiarizationService(
             speaker_service,
             DiarizationResult(succeeded=False, turns=[]),
         ),
-        summary_service=StubSummaryService(),
-        sentiment_analysis_service=StubSentimentAnalysisService(),
-        translation_service=StubTranslationService(),
+        default_asr_provider="volcengine",
+        diarization_mode="disabled",
     )
+    app.state.session_manager = session_manager
 
     with TestClient(app) as client:
         with client.websocket_connect("/ws/meeting?scene=general&provider=volcengine") as websocket:
+            session_started = websocket.receive_json()
             websocket.send_bytes(b"\x00\x00" * 160)
             first = websocket.receive_json()
             websocket.send_bytes(b"\x00\x00" * 160)
@@ -332,6 +428,7 @@ def test_websocket_volcengine_partial_transcript_is_updated_in_place() -> None:
             third = websocket.receive_json()
             fourth = websocket.receive_json()
 
+    assert session_started["type"] == "session_started"
     assert first["type"] == "transcript"
     assert first["data"]["transcript_index"] == 0
     assert first["data"]["text"] == "Hello"
@@ -351,3 +448,114 @@ def test_websocket_volcengine_partial_transcript_is_updated_in_place() -> None:
     assert fourth["data"]["overview"].startswith("The team reviewed")
     assert fourth["data"]["key_topics"] == ["Meeting plan", "Follow-up"]
     assert fourth["data"]["action_items"][0]["is_actionable"] is True
+
+
+def test_meeting_history_keeps_draft_after_disconnect(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+    )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general") as websocket:
+            session_started = websocket.receive_json()
+            websocket.send_bytes(b"\x00\x00" * 160)
+            first = websocket.receive_json()
+
+        list_response = client.get("/api/meetings")
+        detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    assert session_started["type"] == "session_started"
+    assert first["type"] == "transcript"
+    assert list_response.status_code == 200
+    list_payload = list_response.json()
+    assert len(list_payload) == 1
+    assert list_payload[0]["meeting_id"] == session_started["data"]["meeting_id"]
+    assert list_payload[0]["status"] == "draft"
+    assert list_payload[0]["transcript_count"] == 1
+    assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "draft"
+
+
+def test_meeting_history_persists_translation_latest_analysis_and_delete(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_three_segments())
+    volcengine_client = StubASRClient("volcengine", build_three_segments(), is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        translation_service=StubConfiguredTranslationService(),
+        sentiment_analysis_service=IncrementingSentimentAnalysisService(),
+    )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&target_lang=ja") as websocket:
+            session_started = websocket.receive_json()
+
+            websocket.send_bytes(b"\x00\x00" * 160)
+            websocket.send_bytes(b"\x00\x00" * 160)
+            websocket.send_bytes(b"\x00\x00" * 160)
+
+            pre_finalize_messages = receive_until(
+                websocket,
+                lambda messages: (
+                    sum(1 for message in messages if message["type"] == "transcript") == 3
+                    and sum(1 for message in messages if message["type"] == "translation") == 3
+                    and sum(1 for message in messages if message["type"] == "analysis") >= 1
+                ),
+            )
+
+            websocket.send_json({"type": "finalize"})
+            post_finalize_messages = receive_until(
+                websocket,
+                lambda messages: any(message["type"] == "summary" for message in messages),
+            )
+
+        detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+        list_response = client.get("/api/meetings")
+        delete_response = client.delete(f"/api/meetings/{session_started['data']['meeting_id']}")
+        missing_detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    assert session_started["type"] == "session_started"
+    assert sum(1 for message in pre_finalize_messages if message["type"] == "translation") == 3
+    assert any(message["type"] == "analysis" for message in pre_finalize_messages)
+    assert any(message["type"] == "summary" for message in post_finalize_messages)
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["status"] == "finalized"
+    assert detail_payload["analysis"]["engagement_summary"] == "Analysis #2"
+    assert detail_payload["transcripts"][0]["translated_text"] == "[ja] Hello team"
+    assert detail_payload["transcripts"][0]["translated_target_lang"] == "ja"
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["preview_text"] == "I will send the update today"
+    assert delete_response.status_code == 204
+    assert missing_detail_response.status_code == 404

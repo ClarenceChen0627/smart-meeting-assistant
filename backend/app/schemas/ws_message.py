@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 
 class WebSocketMessageType(str, Enum):
+    SESSION_STARTED = "session_started"
     TRANSCRIPT = "transcript"
     TRANSCRIPT_UPDATE = "transcript_update"
     SPEAKER_UPDATE = "speaker_update"

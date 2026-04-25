@@ -15,12 +15,14 @@ from starlette.websockets import WebSocketState
 from app.clients.asr_base import ASRClient, ASRStream
 from app.core.config import Settings
 from app.schemas.analysis import MeetingAnalysis
+from app.schemas.meeting_history import MeetingHistoryStatus, SessionStarted
 from app.schemas.translation import TranscriptTranslation
-from app.schemas.transcript import TranscriptItem
+from app.schemas.transcript import TranscriptItem, TranscriptSegment
 from app.schemas.ws_message import SpeakerUpdate, WebSocketMessage, WebSocketMessageType
 from app.services.asr_provider_service import ASRProviderSelection, ASRProviderService
 from app.services.audio_codec_service import AudioCodecService
 from app.services.diarization_service import DiarizationService
+from app.services.meeting_history_service import MeetingHistoryService
 from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -32,6 +34,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MeetingSession:
     session_id: str
+    created_at: str
     scene: str
     target_lang: str | None
     websocket: WebSocket
@@ -72,6 +75,7 @@ class SessionManager:
         summary_service: SummaryService,
         sentiment_analysis_service: SentimentAnalysisService,
         translation_service: TranslationService,
+        meeting_history_service: MeetingHistoryService,
     ) -> None:
         self._settings = settings
         self._asr_provider_service = asr_provider_service
@@ -81,6 +85,7 @@ class SessionManager:
         self._summary_service = summary_service
         self._sentiment_analysis_service = sentiment_analysis_service
         self._translation_service = translation_service
+        self._meeting_history_service = meeting_history_service
         self._sessions: dict[str, MeetingSession] = {}
 
     async def create_session(
@@ -92,8 +97,16 @@ class SessionManager:
     ) -> MeetingSession:
         normalized_target_lang = self._translation_service.normalize_target_lang(target_lang)
         selection = self._asr_provider_service.resolve_provider(preferred_provider)
+        session_id = uuid4().hex
+        created_at = self._meeting_history_service.create_meeting(
+            meeting_id=session_id,
+            scene=scene,
+            target_lang=normalized_target_lang,
+            provider=selection.provider_name,
+        )
         session = MeetingSession(
-            session_id=uuid4().hex,
+            session_id=session_id,
+            created_at=created_at,
             scene=scene,
             target_lang=normalized_target_lang,
             websocket=websocket,
@@ -106,6 +119,7 @@ class SessionManager:
         if normalized_target_lang and self._translation_service.is_configured:
             session.translation_worker_task = asyncio.create_task(self._consume_translations(session))
         self._sessions[session.session_id] = session
+        await self._send_session_started(session)
         return session
 
     async def enqueue_audio(self, session: MeetingSession, payload: bytes) -> None:
@@ -206,6 +220,8 @@ class SessionManager:
                 await self._finalize_speakers(session)
                 await self._send_analysis(session, force=True)
                 await self._send_summary(session, force=True)
+                if not session.transcripts:
+                    self._meeting_history_service.mark_finalized(session.session_id)
                 await asyncio.sleep(0.05)
                 await self._close_socket(session, code=1000, reason="finalized")
         except asyncio.CancelledError:
@@ -367,6 +383,7 @@ class SessionManager:
         session: MeetingSession,
         transcript: TranscriptItem,
     ) -> None:
+        self._meeting_history_service.upsert_transcript(session.session_id, transcript)
         await self._send_message(
             session,
             WebSocketMessage(
@@ -380,6 +397,7 @@ class SessionManager:
         session: MeetingSession,
         translation: TranscriptTranslation,
     ) -> None:
+        self._meeting_history_service.update_translation(session.session_id, translation)
         await self._send_message(
             session,
             WebSocketMessage(
@@ -393,6 +411,7 @@ class SessionManager:
         session: MeetingSession,
         transcript: TranscriptItem,
     ) -> None:
+        self._meeting_history_service.upsert_transcript(session.session_id, transcript)
         await self._send_message(
             session,
             WebSocketMessage(
@@ -406,6 +425,8 @@ class SessionManager:
         session: MeetingSession,
         update: SpeakerUpdate,
     ) -> None:
+        transcript = session.transcripts[update.transcript_index]
+        self._meeting_history_service.upsert_transcript(session.session_id, transcript)
         await self._send_message(
             session,
             WebSocketMessage(
@@ -422,6 +443,7 @@ class SessionManager:
         if not self._summary_service.is_configured:
             await self._send_error(session, "DashScope is not configured; summary is empty.")
         summary = await self._summary_service.generate_summary(session.transcripts, session.scene)
+        self._meeting_history_service.update_summary(session.session_id, summary)
         await self._send_message(
             session,
             WebSocketMessage(
@@ -448,6 +470,7 @@ class SessionManager:
                 session.scene,
             )
             session.latest_analysis = analysis
+            self._meeting_history_service.update_analysis(session.session_id, analysis)
             await self._send_message(
                 session,
                 WebSocketMessage(
@@ -493,6 +516,22 @@ class SessionManager:
         await self._send_message(
             session,
             WebSocketMessage(type=WebSocketMessageType.ERROR, data=message),
+        )
+
+    async def _send_session_started(self, session: MeetingSession) -> None:
+        await self._send_message(
+            session,
+            WebSocketMessage(
+                type=WebSocketMessageType.SESSION_STARTED,
+                data=SessionStarted(
+                    meeting_id=session.session_id,
+                    status=MeetingHistoryStatus.DRAFT,
+                    created_at=session.created_at,
+                    scene=session.scene,
+                    target_lang=session.target_lang,
+                    provider=session.active_provider,
+                ).model_dump(),
+            ),
         )
 
     async def _send_message(

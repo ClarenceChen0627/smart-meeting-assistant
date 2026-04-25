@@ -21,6 +21,9 @@ def _load_env_files() -> None:
 
 
 _load_env_files()
+CURRENT_FILE = Path(__file__).resolve()
+BACKEND_ROOT = CURRENT_FILE.parents[2]
+PROJECT_ROOT = CURRENT_FILE.parents[3]
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,7 @@ class Settings:
     ffmpeg_binary: str = os.getenv("FFMPEG_BINARY", "ffmpeg")
     sample_rate: int = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
     audio_channels: int = int(os.getenv("AUDIO_CHANNELS", "1"))
+    meeting_history_db_path: str = os.getenv("MEETING_HISTORY_DB_PATH", "data/meeting_history.sqlite3")
     default_asr_provider: str = os.getenv("DEFAULT_ASR_PROVIDER", "volcengine").strip().lower() or "volcengine"
 
     aliyun_asr_app_key: str = os.getenv("ALIYUN_ASR_APP_KEY", "")
@@ -108,6 +112,13 @@ class Settings:
     @property
     def diarization_enabled(self) -> bool:
         return self.diarization_mode == "offline"
+
+    @property
+    def resolved_meeting_history_db_path(self) -> Path:
+        configured_path = Path(self.meeting_history_db_path)
+        if configured_path.is_absolute():
+            return configured_path
+        return PROJECT_ROOT / configured_path
 
 
 settings = Settings()

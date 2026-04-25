@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.api.health import router as health_router
+from app.api.meetings import router as meetings_router
 from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
 from app.clients.dashscope_asr_client import DashScopeASRClient
@@ -19,6 +20,7 @@ from app.core.logging import configure_logging
 from app.services.audio_codec_service import AudioCodecService
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
+from app.services.meeting_history_service import MeetingHistoryService
 from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
@@ -46,6 +48,7 @@ async def lifespan(app: FastAPI):
     summary_service = SummaryService(dashscope_client)
     sentiment_analysis_service = SentimentAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
+    meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
     session_manager = SessionManager(
         settings=settings,
         asr_provider_service=asr_provider_service,
@@ -55,6 +58,7 @@ async def lifespan(app: FastAPI):
         summary_service=summary_service,
         sentiment_analysis_service=sentiment_analysis_service,
         translation_service=translation_service,
+        meeting_history_service=meeting_history_service,
     )
 
     app.state.settings = settings
@@ -69,6 +73,7 @@ async def lifespan(app: FastAPI):
     app.state.summary_service = summary_service
     app.state.sentiment_analysis_service = sentiment_analysis_service
     app.state.translation_service = translation_service
+    app.state.meeting_history_service = meeting_history_service
     app.state.session_manager = session_manager
 
     try:
@@ -117,6 +122,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(meetings_router)
 app.include_router(transcribe_router)
 app.include_router(websocket_router)
 

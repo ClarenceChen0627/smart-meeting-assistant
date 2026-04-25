@@ -56,3 +56,6 @@ logs/
 .env.local
 .env.*.local
 .python-version
+
+# App data
+data/
