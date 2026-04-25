@@ -61,9 +61,24 @@ export interface MeetingAnalysis {
 }
 
 export interface MeetingSummary {
-  todos: string[]
+  overview: string
+  key_topics: string[]
+  action_items: ActionItem[]
   decisions: string[]
   risks: string[]
+}
+
+export interface ActionItem {
+  task: string
+  assignee: string
+  deadline: string
+  status: 'pending' | 'completed'
+  source_excerpt: string
+  transcript_index: number | null
+  is_actionable: boolean
+  confidence: number
+  owner_explicit: boolean
+  deadline_explicit: boolean
 }
 
 export interface WebSocketMessage {

@@ -1,20 +1,16 @@
-import { CheckCircle2, Circle, Calendar, User, Clock } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import type { MeetingSummary } from '../../types';
+import { Calendar, CheckCircle2, Circle, Clock, User } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { ActionItem as SummaryActionItem, MeetingSummary, TranscriptItem } from '../../types';
 
-interface ActionItem {
+interface ActionItemViewModel extends SummaryActionItem {
   id: string;
-  task: string;
-  assignee: string;
-  deadline: string;
   priority: 'high' | 'medium' | 'low';
-  status: 'pending' | 'completed';
-  extractedFrom: string;
   timestamp: string;
 }
 
 interface ActionItemsPanelProps {
   summary: MeetingSummary | null;
+  transcripts?: TranscriptItem[];
 }
 
 const priorityColors = {
@@ -28,7 +24,7 @@ const statusColors = {
   completed: 'text-green-500'
 };
 
-const inferPriority = (task: string): ActionItem['priority'] => {
+const inferPriority = (task: string): ActionItemViewModel['priority'] => {
   const normalized = task.toLowerCase();
 
   if (/\b(urgent|critical|blocker|risk|asap|high)\b/.test(normalized)) {
@@ -42,51 +38,39 @@ const inferPriority = (task: string): ActionItem['priority'] => {
   return 'medium';
 };
 
-const inferDeadline = (task: string) => {
-  const normalized = task.toLowerCase();
-
-  if (/\btoday\b/.test(normalized)) {
-    return 'Today';
+const formatTimestamp = (item: SummaryActionItem, transcripts: TranscriptItem[]) => {
+  if (item.transcript_index == null) {
+    return 'Summary';
   }
-
-  if (/\btomorrow\b/.test(normalized)) {
-    return 'Tomorrow';
+  const transcript = transcripts[item.transcript_index];
+  if (!transcript) {
+    return `#${item.transcript_index + 1}`;
   }
-
-  if (/\bnext week\b/.test(normalized)) {
-    return 'Next Week';
-  }
-
-  const weekday = task.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i);
-  if (weekday) {
-    return weekday[0];
-  }
-
-  return 'Not specified';
+  const minutes = Math.floor(transcript.start / 60);
+  const seconds = Math.floor(transcript.start % 60);
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
-  const [items, setItems] = useState<ActionItem[]>([]);
+export function ActionItemsPanel({ summary, transcripts = [] }: ActionItemsPanelProps) {
+  const [items, setItems] = useState<ActionItemViewModel[]>([]);
 
   useEffect(() => {
-    if (summary && summary.todos) {
-      setItems(summary.todos.map((todo, index) => ({
-        id: `action-${index}`,
-        task: todo,
-        assignee: 'Unassigned',
-        deadline: inferDeadline(todo),
-        priority: inferPriority(todo),
-        status: 'pending',
-        extractedFrom: todo,
-        timestamp: 'Summary'
-      })));
+    if (summary?.action_items?.length) {
+      setItems(summary.action_items
+        .filter((item) => item.is_actionable)
+        .map((item, index) => ({
+          ...item,
+          id: `action-${index}`,
+          priority: inferPriority(item.task),
+          timestamp: formatTimestamp(item, transcripts),
+        })));
     } else {
       setItems([]);
     }
-  }, [summary]);
+  }, [summary, transcripts]);
 
   const toggleStatus = (id: string) => {
-    setItems((prev) => prev.map(item => {
+    setItems((prev) => prev.map((item) => {
       if (item.id === id) {
         return { ...item, status: item.status === 'completed' ? 'pending' : 'completed' };
       }
@@ -94,8 +78,8 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
     }));
   };
 
-  const pendingItems = items.filter(i => i.status !== 'completed');
-  const completedItems = items.filter(i => i.status === 'completed');
+  const pendingItems = items.filter((item) => item.status !== 'completed');
+  const completedItems = items.filter((item) => item.status === 'completed');
 
   if (!summary) {
     return (
@@ -107,7 +91,6 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {/* Header Stats */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <p className="text-sm text-gray-500 mb-1">Total Action Items</p>
@@ -123,7 +106,12 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
         </div>
       </div>
 
-      {/* Pending Action Items */}
+      {items.length === 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-500">
+          No follow-up actions were extracted from this meeting.
+        </div>
+      )}
+
       {pendingItems.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200">
           <div className="px-6 py-4 border-b border-gray-200">
@@ -162,11 +150,14 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
                         <Clock className="w-4 h-4" />
                         <span>Extracted at {item.timestamp}</span>
                       </div>
+                      <div className="flex items-center gap-1.5">
+                        <span>Confidence {Math.round(item.confidence * 100)}%</span>
+                      </div>
                     </div>
 
                     <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
                       <p className="text-xs text-blue-600 mb-1">Extracted from transcript:</p>
-                      <p className="text-sm text-gray-700 italic">"{item.extractedFrom}"</p>
+                      <p className="text-sm text-gray-700 italic">"{item.source_excerpt}"</p>
                     </div>
                   </div>
                 </div>
@@ -176,7 +167,6 @@ export function ActionItemsPanel({ summary }: ActionItemsPanelProps) {
         </div>
       )}
 
-      {/* Completed Action Items */}
       {completedItems.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200">
           <div className="px-6 py-4 border-b border-gray-200">

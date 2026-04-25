@@ -30,8 +30,10 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 
 - Final summary after recording stops
 - Structured output:
-  - `todos`
+  - `overview`
+  - `key_topics`
   - `decisions`
+  - `action_items`
   - `risks`
 
 ### Meeting analysis
@@ -397,8 +399,28 @@ Supported websocket event types:
 {
   "type": "summary",
   "data": {
-    "todos": [],
-    "decisions": [],
+    "overview": "The team reviewed the weekly report and aligned on the delivery plan. They confirmed the final owner and timeline for the update.",
+    "key_topics": [
+      "Weekly report",
+      "Delivery plan"
+    ],
+    "decisions": [
+      "Finalize the weekly report on Friday"
+    ],
+    "action_items": [
+      {
+        "task": "Send the report by Friday",
+        "assignee": "Speaker 1",
+        "deadline": "Friday",
+        "status": "pending",
+        "source_excerpt": "I will send the report by Friday.",
+        "transcript_index": 3,
+        "is_actionable": true,
+        "confidence": 0.93,
+        "owner_explicit": true,
+        "deadline_explicit": true
+      }
+    ],
     "risks": []
   }
 }

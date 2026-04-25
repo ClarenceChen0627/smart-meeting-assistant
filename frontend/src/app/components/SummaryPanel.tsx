@@ -1,5 +1,5 @@
-import { FileText, Users, Target, TrendingUp } from 'lucide-react';
-import type { MeetingSummary, TranscriptItem } from '../../types';
+import { CheckCircle2, FileText, Target, TrendingUp } from 'lucide-react';
+import type { ActionItem, MeetingSummary, TranscriptItem } from '../../types';
 
 interface SummaryPanelProps {
   summary: MeetingSummary | null;
@@ -32,34 +32,19 @@ const formatSessionDate = () => {
   }).format(new Date());
 };
 
-const getParticipants = (transcripts: TranscriptItem[] = []) => {
-  const participants = Array.from(
-    new Set(
-      transcripts
-        .filter((item) => item.speaker_is_final && item.speaker !== 'Unknown')
-        .map((item) => item.speaker?.trim())
-        .filter((speaker): speaker is string => Boolean(speaker))
-    )
-  );
+const formatTranscriptReference = (item: ActionItem, transcripts: TranscriptItem[]) => {
+  if (item.transcript_index == null) {
+    return 'Summary';
+  }
 
-  return participants.length > 0 ? participants : ['Participants unavailable'];
-};
+  const transcript = transcripts[item.transcript_index];
+  if (!transcript) {
+    return `#${item.transcript_index + 1}`;
+  }
 
-const buildOverview = (summary: MeetingSummary, participantCount: number) => {
-  const counts = [
-    `${summary.todos?.length ?? 0} action item${summary.todos?.length === 1 ? '' : 's'}`,
-    `${summary.decisions?.length ?? 0} decision${summary.decisions?.length === 1 ? '' : 's'}`,
-    `${summary.risks?.length ?? 0} risk${summary.risks?.length === 1 ? '' : 's'}`
-  ];
-
-  const participantText =
-    participantCount > 0 && participantCount !== 1
-      ? ` across ${participantCount} participants`
-      : participantCount === 1
-        ? ' from 1 participant'
-        : '';
-
-  return `Meeting summary generated with ${counts.join(', ')}${participantText}. Review the key topics, confirmed decisions, and participant context below.`;
+  const minutes = Math.floor(transcript.start / 60);
+  const seconds = Math.floor(transcript.start % 60);
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 };
 
 export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
@@ -74,27 +59,27 @@ export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
     );
   }
 
-  const participants = getParticipants(transcripts);
-  const participantCount = participants[0] === 'Participants unavailable' ? 0 : participants.length;
-  const keyTopics = [
-    ...(summary.todos ?? []),
-    ...(summary.risks ?? []).map((risk) => `Risk / blocker: ${risk}`)
-  ];
-  const decisions = summary.decisions ?? [];
-  const displayedKeyTopics = keyTopics.length ? keyTopics : ['No key topics extracted.'];
-  const displayedDecisions = decisions.length ? decisions : ['No decisions extracted.'];
+  const displayedActionItems = summary.action_items.filter((item) => item.is_actionable);
+  const hasMeaningfulSummary =
+    Boolean(summary.overview.trim()) ||
+    summary.key_topics.length > 0 ||
+    summary.decisions.length > 0 ||
+    displayedActionItems.length > 0;
 
-  if (!keyTopics.length && !decisions.length) {
+  if (!hasMeaningfulSummary) {
     return (
       <div className="max-w-5xl mx-auto flex items-center justify-center py-20 text-gray-500">
-        <p>No actionable summary items were extracted from this meeting.</p>
+        <p>No concise meeting summary was generated for this session.</p>
       </div>
     );
   }
 
+  const displayedOverview = summary.overview.trim() || 'No meeting overview was generated for this session.';
+  const displayedTopics = summary.key_topics.length ? summary.key_topics : ['No key topics extracted.'];
+  const displayedDecisions = summary.decisions.length ? summary.decisions : ['No decisions extracted.'];
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {/* Meeting Overview Card */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-start gap-3 mb-4">
           <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -102,8 +87,8 @@ export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
           </div>
           <div className="flex-1">
             <h2 className="text-gray-900 mb-2">Meeting Overview</h2>
-            <p className="text-sm text-gray-600 leading-relaxed">
-              {buildOverview(summary, participantCount)}
+            <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">
+              {displayedOverview}
             </p>
           </div>
         </div>
@@ -120,17 +105,16 @@ export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
         </div>
       </div>
 
-      {/* Key Topics */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
             <TrendingUp className="w-5 h-5 text-purple-600" />
           </div>
-          <h2 className="text-gray-900">Key Topics Discussed</h2>
+          <h2 className="text-gray-900">Key Topics</h2>
         </div>
 
         <div className="space-y-2">
-          {displayedKeyTopics.map((topic, index) => (
+          {displayedTopics.map((topic, index) => (
             <div key={index} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
               <div className="w-6 h-6 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center flex-shrink-0 text-xs">
                 {index + 1}
@@ -141,7 +125,6 @@ export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
         </div>
       </div>
 
-      {/* Decisions Made */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
@@ -164,25 +147,47 @@ export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
         </div>
       </div>
 
-      {/* Participants */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
-            <Users className="w-5 h-5 text-orange-600" />
+          <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+            <CheckCircle2 className="w-5 h-5 text-amber-600" />
           </div>
-          <h2 className="text-gray-900">Participants</h2>
+          <h2 className="text-gray-900">Follow-up Actions</h2>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          {participants.map((participant, index) => (
-            <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
-              <div className="w-8 h-8 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center text-xs">
-                {participant.charAt(0)}
+        {displayedActionItems.length > 0 ? (
+          <div className="space-y-3">
+            {displayedActionItems.map((item, index) => (
+              <div key={index} className="p-4 rounded-lg border border-amber-100 bg-amber-50">
+                <div className="flex items-start justify-between gap-4">
+                  <p className="text-sm text-gray-900 flex-1">{item.task}</p>
+                  <span className="px-2 py-1 rounded text-xs bg-white text-amber-700 border border-amber-200">
+                    {item.status}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2 mt-3 text-xs text-gray-500">
+                  <span className="px-2 py-1 rounded-full bg-white border border-gray-200">
+                    Owner: {item.assignee}
+                  </span>
+                  <span className="px-2 py-1 rounded-full bg-white border border-gray-200">
+                    Deadline: {item.deadline}
+                  </span>
+                  <span className="px-2 py-1 rounded-full bg-white border border-gray-200">
+                    Source: {formatTranscriptReference(item, transcripts)}
+                  </span>
+                  <span className="px-2 py-1 rounded-full bg-white border border-gray-200">
+                    Confidence: {Math.round(item.confidence * 100)}%
+                  </span>
+                </div>
               </div>
-              <span className="text-sm text-gray-700">{participant}</span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-4 rounded-lg border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
+            No follow-up actions extracted.
+          </div>
+        )}
       </div>
     </div>
   );

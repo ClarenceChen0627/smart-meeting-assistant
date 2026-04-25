@@ -75,7 +75,24 @@ class StubSummaryService:
 
     async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
         return MeetingSummary(
-            todos=[f"Follow up with {transcripts[0].speaker}"] if transcripts else [],
+            overview="The team reviewed the meeting plan and wrapped with a final follow-up action.",
+            key_topics=["Meeting plan", "Follow-up"],
+            action_items=[
+                {
+                    "task": f"Follow up with {transcripts[0].speaker}",
+                    "assignee": transcripts[0].speaker,
+                    "deadline": "Not specified",
+                    "status": "pending",
+                    "source_excerpt": transcripts[0].text,
+                    "transcript_index": transcripts[0].transcript_index,
+                    "is_actionable": True,
+                    "confidence": 0.82,
+                    "owner_explicit": True,
+                    "deadline_explicit": False,
+                }
+            ]
+            if transcripts
+            else [],
             decisions=["Finalize diarization"],
             risks=[],
         )
@@ -208,6 +225,11 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
     }
     assert fifth["type"] == "analysis"
     assert sixth["type"] == "summary"
+    assert sixth["data"]["overview"].startswith("The team reviewed")
+    assert sixth["data"]["key_topics"] == ["Meeting plan", "Follow-up"]
+    assert sixth["data"]["action_items"][0]["assignee"] == "Speaker 1"
+    assert sixth["data"]["action_items"][0]["confidence"] == 0.82
+    assert sixth["data"]["action_items"][0]["is_actionable"] is True
 
 
 def test_transcribe_batch_uses_native_volcengine_speaker_info_without_diarization() -> None:
@@ -326,3 +348,6 @@ def test_websocket_volcengine_partial_transcript_is_updated_in_place() -> None:
 
     assert third["type"] == "analysis"
     assert fourth["type"] == "summary"
+    assert fourth["data"]["overview"].startswith("The team reviewed")
+    assert fourth["data"]["key_topics"] == ["Meeting plan", "Follow-up"]
+    assert fourth["data"]["action_items"][0]["is_actionable"] is True

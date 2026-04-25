@@ -301,7 +301,7 @@ export default function App() {
             />
           )}
           {activeTab === 'summary' && <SummaryPanel summary={summary} transcripts={transcripts} />}
-          {activeTab === 'actions' && <ActionItemsPanel summary={summary} />}
+          {activeTab === 'actions' && <ActionItemsPanel summary={summary} transcripts={transcripts} />}
           {activeTab === 'analysis' && <MeetingAnalysisPanel analysis={analysis} transcripts={transcripts} />}
         </div>
       </div>
