@@ -4,6 +4,7 @@ import type { ActionItem, MeetingSummary, TranscriptItem } from '../../types';
 interface SummaryPanelProps {
   summary: MeetingSummary | null;
   transcripts?: TranscriptItem[];
+  meetingDate?: string | null;
 }
 
 const formatDuration = (transcripts: TranscriptItem[] = []) => {
@@ -24,12 +25,13 @@ const formatDuration = (transcripts: TranscriptItem[] = []) => {
   return seconds > 0 ? `${minutes} min ${seconds} sec` : `${minutes} minutes`;
 };
 
-const formatSessionDate = () => {
+const formatSessionDate = (meetingDate?: string | null) => {
+  const value = meetingDate ? new Date(meetingDate) : new Date();
   return new Intl.DateTimeFormat('en-US', {
     month: 'long',
     day: 'numeric',
     year: 'numeric'
-  }).format(new Date());
+  }).format(value);
 };
 
 const formatTranscriptReference = (item: ActionItem, transcripts: TranscriptItem[]) => {
@@ -47,7 +49,7 @@ const formatTranscriptReference = (item: ActionItem, transcripts: TranscriptItem
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
+export function SummaryPanel({ summary, transcripts = [], meetingDate }: SummaryPanelProps) {
   if (!summary) {
     return (
       <div className="max-w-5xl mx-auto flex items-center justify-center py-20 text-gray-500">
@@ -96,7 +98,7 @@ export function SummaryPanel({ summary, transcripts = [] }: SummaryPanelProps) {
         <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-gray-100">
           <div>
             <p className="text-xs text-gray-500 mb-1">Date</p>
-            <p className="text-sm text-gray-900">{formatSessionDate()}</p>
+            <p className="text-sm text-gray-900">{formatSessionDate(meetingDate)}</p>
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">Duration</p>

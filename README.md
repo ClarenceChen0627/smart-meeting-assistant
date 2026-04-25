@@ -57,7 +57,16 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 - Scrollable transcript list
 - Bilingual transcript cards
 - Separate Meeting Summary and Meeting Analysis panels
+- In-app meeting history drawer with saved record selection and deletion
 - Optional Windows portable Electron desktop client
+
+### Meeting history
+
+- SQLite-backed meeting history persistence
+- Each websocket meeting session is saved as a `draft` immediately after connection
+- Live transcript, transcript translations, meeting analysis, and final summary are stored for later review
+- Saved meetings can be reopened in a read-only history view from the frontend
+- Unneeded meeting records can be permanently deleted from the history panel
 
 ### Upload transcription
 
@@ -111,12 +120,13 @@ smart-meeting-assistant/
 
 1. The browser captures microphone audio.
 2. The frontend converts audio into PCM frames and streams them to the backend over WebSocket.
-3. The backend forwards audio to DashScope realtime ASR.
-4. The backend emits `transcript` messages.
-5. The backend translates transcript text and emits `translation` messages.
-6. The backend periodically analyzes emotional dynamics and emits `analysis` messages.
-7. When recording stops, the frontend sends `finalize`.
-8. The backend closes the session WAV, runs offline speaker diarization, emits `speaker_update` messages, sends the final `analysis`, sends the final `summary`, then closes the socket.
+3. The backend creates a persisted `draft` meeting record and emits `session_started`.
+4. The backend forwards audio to the selected realtime ASR provider.
+5. The backend emits `transcript` messages and persists the latest transcript state.
+6. The backend translates transcript text and emits `translation` messages.
+7. The backend periodically analyzes emotional dynamics, emits `analysis`, and stores the latest analysis snapshot.
+8. When recording stops, the frontend sends `finalize`.
+9. The backend closes the session WAV, runs offline speaker diarization, emits `speaker_update` messages, sends the final `analysis`, sends the final `summary`, marks the meeting as `finalized`, then closes the socket.
 
 ## Requirements
 
@@ -163,6 +173,7 @@ LOG_LEVEL=INFO
 FFMPEG_BINARY=ffmpeg
 AUDIO_SAMPLE_RATE=16000
 AUDIO_CHANNELS=1
+MEETING_HISTORY_DB_PATH=data/meeting_history.sqlite3
 ```
 
 ### Important variables
@@ -182,6 +193,7 @@ AUDIO_CHANNELS=1
 - `DIARIZATION_MODEL`: offline diarization model name
 - `HUGGINGFACE_TOKEN`: Hugging Face token used to download the diarization model
 - `FFMPEG_BINARY`: ffmpeg binary path for upload transcription endpoints
+- `MEETING_HISTORY_DB_PATH`: SQLite file path for persisted meeting history
 
 If diarization is disabled or unavailable, the backend still starts and serves requests. Speaker labels remain `Unknown` instead of failing the session.
 
@@ -290,6 +302,9 @@ docker-compose up --build
 
 - `GET /`
 - `GET /api/health`
+- `GET /api/meetings`
+- `GET /api/meetings/{meeting_id}`
+- `DELETE /api/meetings/{meeting_id}`
 - `POST /api/transcribe`
 - `POST /api/transcribe/batch`
 
@@ -305,6 +320,22 @@ ws://localhost:8080/ws/meeting?scene=general&target_lang=en&provider=volcengine
 ```
 
 Supported websocket event types:
+
+#### `session_started`
+
+```json
+{
+  "type": "session_started",
+  "data": {
+    "meeting_id": "1c4f8c5ef3d74f6388d48da5ef4d23a0",
+    "status": "draft",
+    "created_at": "2026-04-25T15:01:02.345678Z",
+    "scene": "general",
+    "target_lang": "en",
+    "provider": "volcengine"
+  }
+}
+```
 
 #### `transcript`
 
@@ -443,6 +474,76 @@ Supported websocket event types:
 }
 ```
 
+### Meeting history responses
+
+#### `GET /api/meetings`
+
+```json
+[
+  {
+    "meeting_id": "1c4f8c5ef3d74f6388d48da5ef4d23a0",
+    "status": "finalized",
+    "scene": "general",
+    "target_lang": "en",
+    "provider": "volcengine",
+    "created_at": "2026-04-25T15:01:02.345678Z",
+    "updated_at": "2026-04-25T15:08:20.123456Z",
+    "transcript_count": 18,
+    "preview_text": "Let's finalize the launch plan and send the weekly report today."
+  }
+]
+```
+
+#### `GET /api/meetings/{meeting_id}`
+
+```json
+{
+  "meeting_id": "1c4f8c5ef3d74f6388d48da5ef4d23a0",
+  "status": "finalized",
+  "scene": "general",
+  "target_lang": "en",
+  "provider": "volcengine",
+  "created_at": "2026-04-25T15:01:02.345678Z",
+  "updated_at": "2026-04-25T15:08:20.123456Z",
+  "transcript_count": 18,
+  "preview_text": "Let's finalize the launch plan and send the weekly report today.",
+  "transcripts": [
+    {
+      "transcript_index": 0,
+      "speaker": "Speaker 1",
+      "speaker_is_final": true,
+      "transcript_is_final": true,
+      "text": "Let's finalize the launch plan.",
+      "start": 0.0,
+      "end": 1.4,
+      "translated_text": "让我们敲定发布计划。",
+      "translated_target_lang": "zh"
+    }
+  ],
+  "summary": {
+    "overview": "The team aligned on the launch plan and concrete follow-up actions.",
+    "key_topics": [
+      "Launch plan"
+    ],
+    "action_items": [],
+    "decisions": [],
+    "risks": []
+  },
+  "analysis": {
+    "overall_sentiment": "neutral",
+    "engagement_level": "medium",
+    "engagement_summary": "The meeting remained focused with steady participation.",
+    "signal_counts": {
+      "agreement": 1,
+      "disagreement": 0,
+      "tension": 0,
+      "hesitation": 0
+    },
+    "highlights": []
+  }
+}
+```
+
 ## Meeting Scenes
 
 ### `general` (Default)
@@ -480,6 +581,8 @@ Supported websocket event types:
 - Meeting analysis combines model output with lightweight rule fallback for obvious Chinese emotional signals
 - Sentiment / engagement analysis is meeting-level, not participant-level
 - Mobile browser recording compatibility is less reliable than desktop
+- Meeting history currently stores metadata, transcripts, translations, summary, and analysis, but not raw audio files
+- Upload transcription endpoints do not create meeting history records
 
 ## License
 

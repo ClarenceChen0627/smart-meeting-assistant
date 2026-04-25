@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import type {
   MeetingAnalysis,
   MeetingSummary,
+  SessionStarted,
   SpeakerUpdate,
   TranscriptItem,
   TranscriptTranslation,
@@ -10,6 +11,7 @@ import type {
 } from '../types';
 
 export interface UseWebSocketOptions {
+  onSessionStarted: (data: SessionStarted) => void;
   onTranscript: (data: TranscriptItem) => void;
   onTranscriptUpdate: (data: TranscriptItem) => void;
   onSpeakerUpdate: (data: SpeakerUpdate) => void;
@@ -90,7 +92,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
         socket.onmessage = (event) => {
           try {
             const message: WebSocketMessage = JSON.parse(event.data);
-            if (message.type === 'transcript') {
+            if (message.type === 'session_started') {
+              optionsRef.current.onSessionStarted(message.data as SessionStarted);
+            } else if (message.type === 'transcript') {
               optionsRef.current.onTranscript(message.data as TranscriptItem);
             } else if (message.type === 'transcript_update') {
               optionsRef.current.onTranscriptUpdate(message.data as TranscriptItem);

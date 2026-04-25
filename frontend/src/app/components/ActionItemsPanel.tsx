@@ -11,6 +11,7 @@ interface ActionItemViewModel extends SummaryActionItem {
 interface ActionItemsPanelProps {
   summary: MeetingSummary | null;
   transcripts?: TranscriptItem[];
+  readOnly?: boolean;
 }
 
 const priorityColors = {
@@ -51,7 +52,7 @@ const formatTimestamp = (item: SummaryActionItem, transcripts: TranscriptItem[])
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-export function ActionItemsPanel({ summary, transcripts = [] }: ActionItemsPanelProps) {
+export function ActionItemsPanel({ summary, transcripts = [], readOnly = false }: ActionItemsPanelProps) {
   const [items, setItems] = useState<ActionItemViewModel[]>([]);
 
   useEffect(() => {
@@ -70,6 +71,9 @@ export function ActionItemsPanel({ summary, transcripts = [] }: ActionItemsPanel
   }, [summary, transcripts]);
 
   const toggleStatus = (id: string) => {
+    if (readOnly) {
+      return;
+    }
     setItems((prev) => prev.map((item) => {
       if (item.id === id) {
         return { ...item, status: item.status === 'completed' ? 'pending' : 'completed' };
@@ -124,6 +128,7 @@ export function ActionItemsPanel({ summary, transcripts = [] }: ActionItemsPanel
                 <div className="flex items-start gap-4">
                   <button
                     onClick={() => toggleStatus(item.id)}
+                    disabled={readOnly}
                     className={`mt-1 flex-shrink-0 ${statusColors[item.status]}`}
                   >
                     <Circle className="w-5 h-5" />
@@ -179,6 +184,7 @@ export function ActionItemsPanel({ summary, transcripts = [] }: ActionItemsPanel
                 <div className="flex items-start gap-4">
                   <button
                     onClick={() => toggleStatus(item.id)}
+                    disabled={readOnly}
                     className={`mt-1 flex-shrink-0 ${statusColors[item.status]}`}
                   >
                     <CheckCircle2 className="w-5 h-5" />

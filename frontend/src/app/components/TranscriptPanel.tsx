@@ -21,6 +21,10 @@ interface TranscriptPanelProps {
   isRecording: boolean;
   currentLanguage: string;
   transcripts: DisplayTranscriptItem[];
+  title?: string;
+  description?: string;
+  emptyMessage?: string;
+  showLiveBadge?: boolean;
 }
 
 const formatTime = (seconds: number): string => {
@@ -56,7 +60,15 @@ const getSpeakerColor = (speaker: string) => {
   return speakerColorCache[speaker];
 };
 
-export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: TranscriptPanelProps) {
+export function TranscriptPanel({
+  isRecording,
+  currentLanguage,
+  transcripts,
+  title = 'Live Transcript',
+  description = 'Real-time speech-to-text with speaker identification',
+  emptyMessage = 'Click "Start Recording" to begin transcription',
+  showLiveBadge = true,
+}: TranscriptPanelProps) {
   // Always show translation if available, regardless of whether it is 'en'
   const showTranslation = true;
   
@@ -74,13 +86,13 @@ export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: T
       <div className="px-6 py-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-gray-900">Live Transcript</h2>
+            <h2 className="text-gray-900">{title}</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Real-time speech-to-text with speaker identification
+              {description}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {isRecording && (
+            {showLiveBadge && isRecording && (
               <div className="flex items-center gap-2 text-red-600">
                 <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" />
                 <span className="text-sm">Live</span>
@@ -158,7 +170,7 @@ export function TranscriptPanel({ isRecording, currentLanguage, transcripts }: T
         {!isRecording && safeTranscripts.length === 0 && (
           <div className="text-center py-12">
             <Mic className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500">Click "Start Recording" to begin transcription</p>
+            <p className="text-gray-500">{emptyMessage}</p>
           </div>
         )}
       </div>
