@@ -55,7 +55,7 @@ export function SummaryPanel({ summary, transcripts = [], meetingDate }: Summary
       <div className="max-w-5xl mx-auto flex items-center justify-center py-20 text-gray-500">
         <div className="text-center">
           <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <p>Meeting summary will appear here after the session is finalized.</p>
+          <p>Meeting summary will appear here once processing is complete.</p>
         </div>
       </div>
     );

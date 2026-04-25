@@ -26,6 +26,7 @@ from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
+from app.services.upload_meeting_service import UploadMeetingService
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -49,6 +50,16 @@ async def lifespan(app: FastAPI):
     sentiment_analysis_service = SentimentAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    upload_meeting_service = UploadMeetingService(
+        asr_provider_service=asr_provider_service,
+        audio_codec_service=audio_codec_service,
+        speaker_service=speaker_service,
+        diarization_service=diarization_service,
+        summary_service=summary_service,
+        sentiment_analysis_service=sentiment_analysis_service,
+        translation_service=translation_service,
+        meeting_history_service=meeting_history_service,
+    )
     session_manager = SessionManager(
         settings=settings,
         asr_provider_service=asr_provider_service,
@@ -74,6 +85,7 @@ async def lifespan(app: FastAPI):
     app.state.sentiment_analysis_service = sentiment_analysis_service
     app.state.translation_service = translation_service
     app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
     app.state.session_manager = session_manager
 
     try:
@@ -102,6 +114,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting %s %s", settings.service_name, settings.service_version)
     yield
+    await upload_meeting_service.shutdown()
     await dashscope_asr_client.aclose()
     await volcengine_asr_client.aclose()
     await dashscope_client.aclose()

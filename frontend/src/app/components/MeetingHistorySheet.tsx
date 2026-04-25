@@ -36,7 +36,14 @@ interface MeetingHistorySheetProps {
 
 const statusClasses: Record<MeetingHistoryListItem['status'], string> = {
   draft: 'bg-amber-100 text-amber-700 border-amber-200',
+  processing: 'bg-blue-100 text-blue-700 border-blue-200',
+  failed: 'bg-red-100 text-red-700 border-red-200',
   finalized: 'bg-green-100 text-green-700 border-green-200',
+};
+
+const sourceClasses: Record<MeetingHistoryListItem['source_type'], string> = {
+  live: 'bg-slate-100 text-slate-700 border-slate-200',
+  upload: 'bg-violet-100 text-violet-700 border-violet-200',
 };
 
 const sceneLabels: Record<string, string> = {
@@ -71,7 +78,7 @@ export function MeetingHistorySheet({
         <SheetHeader className="border-b border-gray-200">
           <SheetTitle>Meeting History</SheetTitle>
           <SheetDescription>
-            Review saved live transcripts, summaries, action items, and meeting analysis.
+            Review saved live and uploaded meeting transcripts, summaries, action items, and analysis.
           </SheetDescription>
         </SheetHeader>
 
@@ -96,7 +103,7 @@ export function MeetingHistorySheet({
             <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 py-12 text-center">
               <FileClock className="mb-3 h-10 w-10 text-gray-300" />
               <p className="text-sm text-gray-600">No meeting history yet.</p>
-              <p className="mt-1 text-xs text-gray-500">Completed and draft meetings will appear here.</p>
+              <p className="mt-1 text-xs text-gray-500">Live and upload meetings will appear here as they are processed.</p>
             </div>
           )}
 
@@ -125,6 +132,9 @@ export function MeetingHistorySheet({
                           <span className={`rounded-full border px-2 py-0.5 text-xs ${statusClasses[meeting.status]}`}>
                             {meeting.status}
                           </span>
+                          <span className={`rounded-full border px-2 py-0.5 text-xs uppercase ${sourceClasses[meeting.source_type]}`}>
+                            {meeting.source_type}
+                          </span>
                           <span className="text-xs text-gray-500">{sceneLabels[meeting.scene] || meeting.scene}</span>
                           {meeting.target_lang && (
                             <span className="text-xs text-gray-400">Translate: {meeting.target_lang.toUpperCase()}</span>
@@ -138,11 +148,20 @@ export function MeetingHistorySheet({
                           </span>
                           <span>{meeting.transcript_count} transcript{meeting.transcript_count === 1 ? '' : 's'}</span>
                           <span>{meeting.provider}</span>
+                          {meeting.processing_stage && (
+                            <span>Stage: {meeting.processing_stage}</span>
+                          )}
                         </div>
 
                         <p className="mt-3 text-sm text-gray-700">
                           {meeting.preview_text || 'No transcript preview available.'}
                         </p>
+                        {meeting.source_name && (
+                          <p className="mt-2 text-xs text-gray-500">File: {meeting.source_name}</p>
+                        )}
+                        {meeting.error_message && (
+                          <p className="mt-2 text-xs text-red-600">{meeting.error_message}</p>
+                        )}
                       </button>
 
                       <div className="flex items-center gap-2">

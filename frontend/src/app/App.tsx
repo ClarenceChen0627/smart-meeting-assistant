@@ -9,6 +9,7 @@ import { SceneControls } from './components/SceneControls';
 import { SummaryPanel } from './components/SummaryPanel';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import { TranslationControls } from './components/TranslationControls';
+import { UploadMeetingControls } from './components/UploadMeetingControls';
 import { useAudioRecording } from '../hooks/useAudioRecording';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type {
@@ -16,11 +17,15 @@ import type {
   MeetingAnalysis,
   MeetingHistoryListItem,
   MeetingHistoryTranscriptItem,
+  MeetingProcessingStage,
   MeetingRecord,
+  MeetingSourceType,
   MeetingSummary,
   TranscriptItem,
   TranslationTargetLanguage,
 } from '../types';
+
+type InputMode = 'live' | 'upload';
 
 interface DisplayTranscriptItem extends TranscriptItem {
   id: string;
@@ -48,6 +53,18 @@ const buildApiBaseUrl = () => {
 const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider) => {
   const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || 'ws://localhost:8080';
   return `${baseUrl.replace(/\/+$/, '')}/ws/meeting?scene=${scene}&target_lang=${targetLang}&provider=${provider}`;
+};
+
+const processingStageLabels: Record<MeetingProcessingStage, string> = {
+  transcribing: 'Transcribing uploaded audio',
+  translating: 'Generating transcript translations',
+  analyzing: 'Analyzing meeting dynamics',
+  summarizing: 'Generating meeting summary',
+};
+
+const sourceLabels: Record<MeetingSourceType, string> = {
+  live: 'live',
+  upload: 'upload',
 };
 
 const decorateTranscriptsWithAnalysis = (
@@ -80,13 +97,41 @@ const decorateTranscriptsWithAnalysis = (
 
 const toDisplayTranscript = (
   transcript: MeetingHistoryTranscriptItem,
-  prefix: 'history' | 'live'
+  prefix: 'history' | 'live' | 'upload'
 ): DisplayTranscriptItem => ({
   ...transcript,
   id: `${prefix}-${transcript.transcript_index}`,
   translatedText: transcript.translated_text ?? undefined,
   translatedTargetLang: transcript.translated_target_lang ?? undefined,
 });
+
+const toHistoryListItem = (meeting: MeetingRecord): MeetingHistoryListItem => ({
+  meeting_id: meeting.meeting_id,
+  status: meeting.status,
+  source_type: meeting.source_type,
+  scene: meeting.scene,
+  target_lang: meeting.target_lang,
+  provider: meeting.provider,
+  created_at: meeting.created_at,
+  updated_at: meeting.updated_at,
+  transcript_count: meeting.transcript_count,
+  preview_text: meeting.preview_text,
+  processing_stage: meeting.processing_stage,
+  error_message: meeting.error_message,
+  source_name: meeting.source_name,
+});
+
+const mergeMeetingIntoHistoryList = (
+  meetings: MeetingHistoryListItem[],
+  meeting: MeetingRecord
+) => {
+  const nextItem = toHistoryListItem(meeting);
+  const next = meetings.some((item) => item.meeting_id === nextItem.meeting_id)
+    ? meetings.map((item) => (item.meeting_id === nextItem.meeting_id ? nextItem : item))
+    : [nextItem, ...meetings];
+
+  return next.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+};
 
 const formatHistoryTimestamp = (value: string) =>
   new Intl.DateTimeFormat('en-US', {
@@ -96,24 +141,53 @@ const formatHistoryTimestamp = (value: string) =>
     minute: '2-digit',
   }).format(new Date(value));
 
+const buildUploadStatusMessage = (
+  meeting: MeetingRecord | null,
+  isUploadingFile: boolean
+) => {
+  if (isUploadingFile) {
+    return 'Uploading audio file...';
+  }
+
+  if (!meeting) {
+    return 'Select a meeting audio file to generate transcript, summary, action items, and analysis.';
+  }
+
+  if (meeting.status === 'processing') {
+    return meeting.processing_stage
+      ? processingStageLabels[meeting.processing_stage]
+      : 'Processing uploaded meeting...';
+  }
+
+  if (meeting.status === 'failed') {
+    return meeting.error_message || 'Upload processing failed.';
+  }
+
+  return 'Upload meeting is ready to review.';
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'analysis'>('transcript');
-  const [viewMode, setViewMode] = useState<'live' | 'history'>('live');
+  const [inputMode, setInputMode] = useState<InputMode>('live');
   const [currentScene, setCurrentScene] = useState<string>('general');
   const [isRecording, setIsRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState<TranslationTargetLanguage>('en');
   const [currentProvider, setCurrentProvider] = useState<ASRProvider>('volcengine');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
+  const [uploadInputKey, setUploadInputKey] = useState(0);
 
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
 
   const [historyList, setHistoryList] = useState<MeetingHistoryListItem[]>([]);
-  const [selectedHistoryMeeting, setSelectedHistoryMeeting] = useState<MeetingRecord | null>(null);
+  const [historyMeeting, setHistoryMeeting] = useState<MeetingRecord | null>(null);
+  const [activeUploadMeeting, setActiveUploadMeeting] = useState<MeetingRecord | null>(null);
   const [isHistorySheetOpen, setIsHistorySheetOpen] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [loadingMeetingId, setLoadingMeetingId] = useState<string | null>(null);
@@ -127,6 +201,10 @@ export default function App() {
     setTranscripts([]);
     setAnalysis(null);
     setSummary(null);
+  };
+
+  const updateHistoryFromMeeting = (meeting: MeetingRecord) => {
+    setHistoryList((prev) => mergeMeetingIntoHistoryList(prev, meeting));
   };
 
   const loadHistoryList = async () => {
@@ -145,9 +223,60 @@ export default function App() {
     }
   };
 
+  const refreshMeetingDetail = async (meetingId: string) => {
+    const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`);
+    if (!response.ok) {
+      throw new Error(`Failed to load meeting record (${response.status})`);
+    }
+
+    const payload = await response.json() as MeetingRecord;
+    setActiveUploadMeeting((prev) => (prev?.meeting_id === payload.meeting_id ? payload : prev));
+    setHistoryMeeting((prev) => (prev?.meeting_id === payload.meeting_id ? payload : prev));
+    updateHistoryFromMeeting(payload);
+    return payload;
+  };
+
   useEffect(() => {
     void loadHistoryList();
   }, []);
+
+  useEffect(() => {
+    const meetingIds = Array.from(
+      new Set(
+        [
+          activeUploadMeeting?.status === 'processing' ? activeUploadMeeting.meeting_id : null,
+          historyMeeting?.status === 'processing' ? historyMeeting.meeting_id : null,
+        ].filter((value): value is string => Boolean(value))
+      )
+    );
+
+    if (meetingIds.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      for (const meetingId of meetingIds) {
+        try {
+          await refreshMeetingDetail(meetingId);
+        } catch (error) {
+          if (!cancelled) {
+            setServerError(error instanceof Error ? error.message : 'Failed to refresh meeting record');
+          }
+        }
+      }
+    };
+
+    void poll();
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeUploadMeeting?.meeting_id, activeUploadMeeting?.status, historyMeeting?.meeting_id, historyMeeting?.status]);
 
   const { connect, disconnect, finalize, sendAudio, isConnected } = useWebSocket({
     onSessionStarted: (data) => {
@@ -223,12 +352,20 @@ export default function App() {
     }
   });
 
+  const handleInputModeChange = (mode: InputMode) => {
+    if (isRecording || isStarting || isFinalizing) {
+      return;
+    }
+    setInputMode(mode);
+    setHistoryMeeting(null);
+  };
+
   const handleStartRecording = async () => {
     try {
       setIsStarting(true);
       setServerError('');
-      setViewMode('live');
-      setSelectedHistoryMeeting(null);
+      setInputMode('live');
+      setHistoryMeeting(null);
       setActiveTab('transcript');
       resetLiveSessionState();
 
@@ -278,18 +415,59 @@ export default function App() {
     void handleStartRecording();
   };
 
+  const handleUploadMeeting = async () => {
+    if (!selectedUploadFile) {
+      setServerError('Please select an audio file to upload.');
+      return;
+    }
+
+    try {
+      setIsUploadingFile(true);
+      setServerError('');
+      setHistoryMeeting(null);
+      setActiveTab('transcript');
+
+      const formData = new FormData();
+      formData.append('file', selectedUploadFile);
+      formData.append('scene', currentScene);
+      formData.append('target_lang', currentLanguage);
+      formData.append('provider', currentProvider);
+
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        let detail = `Failed to upload meeting audio (${response.status})`;
+        try {
+          const payload = await response.json() as { detail?: string };
+          if (payload.detail) {
+            detail = payload.detail;
+          }
+        } catch {
+          // ignore response parse failures
+        }
+        throw new Error(detail);
+      }
+
+      const payload = await response.json() as MeetingRecord;
+      setActiveUploadMeeting(payload);
+      updateHistoryFromMeeting(payload);
+      setSelectedUploadFile(null);
+      setUploadInputKey((prev) => prev + 1);
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : 'Failed to upload meeting audio');
+    } finally {
+      setIsUploadingFile(false);
+    }
+  };
+
   const handleSelectHistoryMeeting = async (meetingId: string) => {
     try {
       setLoadingMeetingId(meetingId);
       setServerError('');
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`);
-      if (!response.ok) {
-        throw new Error(`Failed to load meeting record (${response.status})`);
-      }
-
-      const payload = await response.json() as MeetingRecord;
-      setSelectedHistoryMeeting(payload);
-      setViewMode('history');
+      const payload = await refreshMeetingDetail(meetingId);
+      setHistoryMeeting(payload);
       setIsHistorySheetOpen(false);
     } catch (error) {
       setServerError(error instanceof Error ? error.message : 'Failed to load meeting record');
@@ -311,9 +489,12 @@ export default function App() {
 
       setHistoryList((prev) => prev.filter((meeting) => meeting.meeting_id !== meetingId));
 
-      if (selectedHistoryMeeting?.meeting_id === meetingId) {
-        setSelectedHistoryMeeting(null);
-        setViewMode('live');
+      if (historyMeeting?.meeting_id === meetingId) {
+        setHistoryMeeting(null);
+      }
+
+      if (activeUploadMeeting?.meeting_id === meetingId) {
+        setActiveUploadMeeting(null);
       }
 
       if (currentMeetingId === meetingId) {
@@ -321,8 +502,6 @@ export default function App() {
         setStatusMessage('Ready to start meeting');
         setActiveTab('transcript');
       }
-
-      void loadHistoryList();
     } catch (error) {
       setServerError(error instanceof Error ? error.message : 'Failed to delete meeting record');
     } finally {
@@ -330,23 +509,34 @@ export default function App() {
     }
   };
 
-  const displayedTranscripts = viewMode === 'history' && selectedHistoryMeeting
+  const displayedMeeting = historyMeeting ?? (inputMode === 'upload' ? activeUploadMeeting : null);
+  const isHistoryView = historyMeeting !== null;
+  const isUploadCurrentView = !isHistoryView && inputMode === 'upload';
+  const displayedTranscripts = displayedMeeting
     ? decorateTranscriptsWithAnalysis(
-        selectedHistoryMeeting.transcripts.map((item) => toDisplayTranscript(item, 'history')),
-        selectedHistoryMeeting.analysis
+        displayedMeeting.transcripts.map((item) =>
+          toDisplayTranscript(item, isHistoryView ? 'history' : 'upload')
+        ),
+        displayedMeeting.analysis
       )
     : transcripts;
-  const displayedSummary = viewMode === 'history' ? selectedHistoryMeeting?.summary ?? null : summary;
-  const displayedAnalysis = viewMode === 'history' ? selectedHistoryMeeting?.analysis ?? null : analysis;
-  const displayedLanguage = viewMode === 'history'
-    ? selectedHistoryMeeting?.target_lang ?? currentLanguage
-    : currentLanguage;
-  const displayedMeetingDate = viewMode === 'history' ? selectedHistoryMeeting?.created_at ?? null : null;
-  const isHistoryView = viewMode === 'history' && selectedHistoryMeeting !== null;
+  const displayedSummary = displayedMeeting?.summary ?? (displayedMeeting ? null : summary);
+  const displayedAnalysis = displayedMeeting?.analysis ?? (displayedMeeting ? null : analysis);
+  const displayedLanguage = displayedMeeting?.target_lang ?? currentLanguage;
+  const displayedMeetingDate = displayedMeeting?.created_at ?? null;
   const canOpenHistory = !isRecording && !isStarting && !isFinalizing;
+  const canSwitchInputMode = !isRecording && !isStarting && !isFinalizing;
+  const selectedMeetingId = historyMeeting?.meeting_id
+    ?? (inputMode === 'upload' ? activeUploadMeeting?.meeting_id ?? null : currentMeetingId);
+
+  const displayStatusMessage = isHistoryView
+    ? `Viewing saved ${sourceLabels[historyMeeting.source_type]} meeting record`
+    : inputMode === 'upload'
+      ? buildUploadStatusMessage(activeUploadMeeting, isUploadingFile)
+      : statusMessage;
 
   const tabs = [
-    { id: 'transcript', label: 'Live Transcript' },
+    { id: 'transcript', label: 'Transcript' },
     { id: 'summary', label: 'Summary' },
     { id: 'actions', label: 'Action Items' },
     { id: 'analysis', label: 'Analysis' }
@@ -355,11 +545,38 @@ export default function App() {
   return (
     <div className="size-full bg-gray-50 flex flex-col">
       <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between gap-6">
+        <div className="flex items-start justify-between gap-6">
           <div>
+            <div className="inline-flex rounded-xl bg-gray-100 p-1 mb-3">
+              <button
+                type="button"
+                onClick={() => handleInputModeChange('live')}
+                disabled={!canSwitchInputMode}
+                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                  inputMode === 'live'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                } ${!canSwitchInputMode ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                Live
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInputModeChange('upload')}
+                disabled={!canSwitchInputMode}
+                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                  inputMode === 'upload'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                } ${!canSwitchInputMode ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                Upload
+              </button>
+            </div>
+
             <h1 className="text-gray-900 mb-1">Smart Meeting Assistant</h1>
             <p className="text-sm text-gray-500">
-              {statusMessage}
+              {displayStatusMessage}
             </p>
             {serverError && (
               <p className="text-sm text-red-500 flex items-center gap-1 mt-1">
@@ -397,46 +614,61 @@ export default function App() {
               onLanguageChange={(lang) => setCurrentLanguage(lang as TranslationTargetLanguage)}
             />
 
-            <button
-              onClick={() => setIsMuted(!isMuted)}
-              disabled={!isRecording}
-              className={`p-3 rounded-lg transition-colors ${
-                !isRecording ? 'opacity-50 cursor-not-allowed bg-gray-100' :
-                isMuted
-                  ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-              title={isMuted ? 'Unmute' : 'Mute'}
-            >
-              {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            </button>
+            {inputMode === 'live' ? (
+              <>
+                <button
+                  onClick={() => setIsMuted(!isMuted)}
+                  disabled={!isRecording}
+                  className={`p-3 rounded-lg transition-colors ${
+                    !isRecording ? 'opacity-50 cursor-not-allowed bg-gray-100' :
+                    isMuted
+                      ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  title={isMuted ? 'Unmute' : 'Mute'}
+                >
+                  {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                </button>
 
-            <button
-              onClick={toggleRecording}
-              disabled={isStarting || isFinalizing}
-              className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-colors min-w-[200px] justify-center ${
-                isStarting || isFinalizing ? 'bg-gray-400 text-white cursor-wait' :
-                isRecording
-                  ? 'bg-red-600 text-white hover:bg-red-700'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-              }`}
-            >
-              {isStarting ? (
-                <span>Starting...</span>
-              ) : isFinalizing ? (
-                <span>Generating Summary...</span>
-              ) : isRecording ? (
-                <>
-                  <Pause className="w-5 h-5" />
-                  <span>Stop Recording</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-5 h-5" />
-                  <span>Start Recording</span>
-                </>
-              )}
-            </button>
+                <button
+                  onClick={toggleRecording}
+                  disabled={isStarting || isFinalizing}
+                  className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-colors min-w-[200px] justify-center ${
+                    isStarting || isFinalizing ? 'bg-gray-400 text-white cursor-wait' :
+                    isRecording
+                      ? 'bg-red-600 text-white hover:bg-red-700'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {isStarting ? (
+                    <span>Starting...</span>
+                  ) : isFinalizing ? (
+                    <span>Generating Summary...</span>
+                  ) : isRecording ? (
+                    <>
+                      <Pause className="w-5 h-5" />
+                      <span>Stop Recording</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5" />
+                      <span>Start Recording</span>
+                    </>
+                  )}
+                </button>
+              </>
+            ) : (
+              <UploadMeetingControls
+                inputKey={uploadInputKey}
+                selectedFileName={selectedUploadFile?.name ?? null}
+                isUploading={isUploadingFile}
+                disabled={isRecording || isStarting || isFinalizing}
+                onFileChange={setSelectedUploadFile}
+                onUpload={() => {
+                  void handleUploadMeeting();
+                }}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -446,7 +678,7 @@ export default function App() {
         onOpenChange={setIsHistorySheetOpen}
         meetings={historyList}
         isLoading={isHistoryLoading}
-        selectedMeetingId={selectedHistoryMeeting?.meeting_id ?? null}
+        selectedMeetingId={selectedMeetingId}
         loadingMeetingId={loadingMeetingId}
         deletingMeetingId={deletingMeetingId}
         onSelect={(meetingId) => {
@@ -483,34 +715,103 @@ export default function App() {
 
       <div className="flex-1 overflow-auto">
         <div className="p-6 space-y-4">
-          {isHistoryView && selectedHistoryMeeting && (
+          {isHistoryView && historyMeeting && (
             <div className="max-w-7xl mx-auto rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-medium text-blue-900">Viewing saved meeting record</p>
-                <p className="text-sm text-blue-700">
-                  {selectedHistoryMeeting.status} meeting from {formatHistoryTimestamp(selectedHistoryMeeting.updated_at)}
+                <p className="text-sm font-medium text-blue-900">
+                  Viewing saved {sourceLabels[historyMeeting.source_type]} meeting
                 </p>
+                <p className="text-sm text-blue-700">
+                  {historyMeeting.status} record from {formatHistoryTimestamp(historyMeeting.updated_at)}
+                </p>
+                {historyMeeting.processing_stage && (
+                  <p className="text-xs text-blue-700 mt-1">{processingStageLabels[historyMeeting.processing_stage]}</p>
+                )}
+                {historyMeeting.error_message && (
+                  <p className="text-xs text-red-600 mt-1">{historyMeeting.error_message}</p>
+                )}
               </div>
               <button
                 type="button"
-                onClick={() => setViewMode('live')}
+                onClick={() => setHistoryMeeting(null)}
                 className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm text-blue-700 transition-colors hover:bg-blue-100"
               >
                 <RotateCcw className="w-4 h-4" />
-                <span>Return to Live View</span>
+                <span>Return to Current View</span>
               </button>
+            </div>
+          )}
+
+          {isUploadCurrentView && activeUploadMeeting && (
+            <div className={`max-w-7xl mx-auto rounded-xl border px-4 py-3 ${
+              activeUploadMeeting.status === 'failed'
+                ? 'border-red-200 bg-red-50'
+                : activeUploadMeeting.status === 'processing'
+                  ? 'border-blue-200 bg-blue-50'
+                  : 'border-green-200 bg-green-50'
+            }`}>
+              <p className={`text-sm font-medium ${
+                activeUploadMeeting.status === 'failed'
+                  ? 'text-red-900'
+                  : activeUploadMeeting.status === 'processing'
+                    ? 'text-blue-900'
+                    : 'text-green-900'
+              }`}>
+                {activeUploadMeeting.status === 'processing'
+                  ? 'Processing uploaded meeting'
+                  : activeUploadMeeting.status === 'failed'
+                    ? 'Uploaded meeting failed'
+                    : 'Uploaded meeting ready'}
+              </p>
+              <p className={`text-sm mt-1 ${
+                activeUploadMeeting.status === 'failed'
+                  ? 'text-red-700'
+                  : activeUploadMeeting.status === 'processing'
+                    ? 'text-blue-700'
+                    : 'text-green-700'
+              }`}>
+                {activeUploadMeeting.source_name
+                  ? `File: ${activeUploadMeeting.source_name}`
+                  : 'Uploaded meeting record'}
+              </p>
+              {activeUploadMeeting.processing_stage && (
+                <p className="text-xs text-blue-700 mt-1">{processingStageLabels[activeUploadMeeting.processing_stage]}</p>
+              )}
+              {activeUploadMeeting.error_message && (
+                <p className="text-xs text-red-600 mt-1">{activeUploadMeeting.error_message}</p>
+              )}
             </div>
           )}
 
           {activeTab === 'transcript' && (
             <TranscriptPanel
-              isRecording={isRecording && !isHistoryView}
+              isRecording={isRecording && !isHistoryView && inputMode === 'live'}
               currentLanguage={displayedLanguage}
               transcripts={displayedTranscripts}
-              title={isHistoryView ? 'Meeting Transcript' : 'Live Transcript'}
-              description={isHistoryView ? 'Saved transcript, translations, and analysis highlights for this meeting.' : undefined}
-              emptyMessage={isHistoryView ? 'No transcript captured for this meeting.' : undefined}
-              showLiveBadge={!isHistoryView}
+              title={
+                isHistoryView
+                  ? 'Meeting Transcript'
+                  : isUploadCurrentView
+                    ? 'Uploaded Transcript'
+                    : 'Live Transcript'
+              }
+              description={
+                isHistoryView
+                  ? 'Saved transcript, translations, and analysis highlights for this meeting.'
+                  : isUploadCurrentView
+                    ? 'Uploaded audio is processed into the same transcript, summary, action items, and analysis workflow.'
+                    : undefined
+              }
+              emptyMessage={
+                isHistoryView
+                  ? 'No transcript captured for this meeting.'
+                  : isUploadCurrentView
+                    ? activeUploadMeeting
+                      ? 'Transcript will appear here as soon as transcription completes.'
+                      : 'Choose a meeting audio file and click "Process Upload".'
+                    : undefined
+              }
+              showLiveBadge={inputMode === 'live' && !isHistoryView}
             />
           )}
           {activeTab === 'summary' && (
@@ -524,7 +825,7 @@ export default function App() {
             <ActionItemsPanel
               summary={displayedSummary}
               transcripts={displayedTranscripts}
-              readOnly={isHistoryView}
+              readOnly={isHistoryView || isUploadCurrentView}
             />
           )}
           {activeTab === 'analysis' && (

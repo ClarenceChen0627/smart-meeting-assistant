@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -16,11 +19,17 @@ from app.services.diarization_service import DiarizationResult, DiarizationServi
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
+from app.services.upload_meeting_service import UploadMeetingService
 
 
 class StubAudioCodecService:
     async def convert_upload_to_wav(self, audio_data: bytes, *, filename: str | None, content_type: str | None) -> bytes:
         return audio_data
+
+
+class FailingAudioCodecService:
+    async def convert_upload_to_wav(self, audio_data: bytes, *, filename: str | None, content_type: str | None) -> bytes:
+        raise RuntimeError("Audio conversion failed in test")
 
 
 class StubASRClient:
@@ -60,6 +69,11 @@ class StubASRStream:
 
     async def aclose(self) -> None:
         return
+
+
+class FailingASRClient(StubASRClient):
+    async def transcribe_wav(self, audio_data: bytes) -> list[TranscriptSegment]:
+        raise RuntimeError("ASR failed in test")
 
 
 class StubTranslationService:
@@ -132,6 +146,18 @@ class IncrementingSentimentAnalysisService:
             engagement_level="medium",
             engagement_summary=f"Analysis #{self.call_count}",
         )
+
+
+class SlowSummaryService(StubSummaryService):
+    async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
+        await asyncio.sleep(0.05)
+        return await super().generate_summary(transcripts, scene)
+
+
+class SlowSentimentAnalysisService(IncrementingSentimentAnalysisService):
+    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+        await asyncio.sleep(0.05)
+        return await super().analyze_meeting(transcripts, scene)
 
 
 class StubDiarizationService(DiarizationService):
@@ -210,6 +236,42 @@ def build_session_manager(
     )
 
 
+def build_upload_service(
+    tmp_path,
+    *,
+    speaker_service: SpeakerService,
+    dashscope_client: StubASRClient,
+    volcengine_client: StubASRClient,
+    diarization_service: DiarizationService,
+    default_asr_provider: str,
+    diarization_mode: str,
+    audio_codec_service=None,
+    summary_service=None,
+    sentiment_analysis_service=None,
+    translation_service=None,
+) -> tuple[Settings, MeetingHistoryService, UploadMeetingService]:
+    settings = build_settings(
+        tmp_path,
+        default_asr_provider=default_asr_provider,
+        diarization_mode=diarization_mode,
+    )
+    meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    return settings, meeting_history_service, UploadMeetingService(
+        asr_provider_service=ASRProviderService(
+            settings=settings,
+            dashscope_client=dashscope_client,
+            volcengine_client=volcengine_client,
+        ),
+        audio_codec_service=audio_codec_service or StubAudioCodecService(),
+        speaker_service=speaker_service,
+        diarization_service=diarization_service,
+        summary_service=summary_service or StubSummaryService(),
+        sentiment_analysis_service=sentiment_analysis_service or StubSentimentAnalysisService(),
+        translation_service=translation_service or StubTranslationService(),
+        meeting_history_service=meeting_history_service,
+    )
+
+
 def receive_until(websocket, predicate, *, limit: int = 20) -> list[dict]:
     messages = []
     for _ in range(limit):
@@ -218,6 +280,25 @@ def receive_until(websocket, predicate, *, limit: int = 20) -> list[dict]:
         if predicate(messages):
             return messages
     raise AssertionError("Timed out waiting for expected websocket messages")
+
+
+def wait_for_meeting_status(
+    client: TestClient,
+    meeting_id: str,
+    expected_status: str,
+    *,
+    attempts: int = 80,
+    delay_seconds: float = 0.02,
+):
+    latest_payload = None
+    for _ in range(attempts):
+        response = client.get(f"/api/meetings/{meeting_id}")
+        assert response.status_code == 200
+        latest_payload = response.json()
+        if latest_payload["status"] == expected_status:
+            return latest_payload
+        time.sleep(delay_seconds)
+    raise AssertionError(f"Timed out waiting for meeting {meeting_id} to reach {expected_status!r}: {latest_payload}")
 
 
 def test_transcribe_batch_returns_final_diarized_speakers() -> None:
@@ -559,3 +640,246 @@ def test_meeting_history_persists_translation_latest_analysis_and_delete(tmp_pat
     assert list_response.json()[0]["preview_text"] == "I will send the update today"
     assert delete_response.status_code == 204
     assert missing_detail_response.status_code == 404
+
+
+def test_upload_endpoint_creates_processing_record_and_finalizes_with_results(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_three_segments())
+    volcengine_client = StubASRClient("volcengine", build_three_segments(), is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        translation_service=StubConfiguredTranslationService(),
+        sentiment_analysis_service=IncrementingSentimentAnalysisService(),
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.wav", b"fake-audio", "audio/wav"),
+                "scene": (None, "general"),
+                "target_lang": (None, "ja"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        initial_payload = response.json()
+        assert initial_payload["status"] == "processing"
+        assert initial_payload["source_type"] == "upload"
+        assert initial_payload["processing_stage"] == "transcribing"
+        assert initial_payload["source_name"] == "meeting.wav"
+
+        finalized_payload = wait_for_meeting_status(client, initial_payload["meeting_id"], "finalized")
+        list_response = client.get("/api/meetings")
+
+    assert finalized_payload["source_type"] == "upload"
+    assert finalized_payload["processing_stage"] is None
+    assert finalized_payload["error_message"] is None
+    assert finalized_payload["transcript_count"] == 3
+    assert finalized_payload["summary"]["overview"].startswith("The team reviewed")
+    assert finalized_payload["analysis"]["engagement_summary"] == "Analysis #1"
+    assert finalized_payload["transcripts"][0]["translated_text"] == "[ja] Hello team"
+    assert finalized_payload["transcripts"][0]["translated_target_lang"] == "ja"
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["source_type"] == "upload"
+
+
+def test_upload_detail_polling_returns_partial_results_before_summary(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_three_segments())
+    volcengine_client = StubASRClient("volcengine", build_three_segments(), is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        translation_service=StubConfiguredTranslationService(),
+        sentiment_analysis_service=SlowSentimentAnalysisService(),
+        summary_service=SlowSummaryService(),
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.wav", b"fake-audio", "audio/wav"),
+                "scene": (None, "general"),
+                "target_lang": (None, "ja"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        meeting_id = response.json()["meeting_id"]
+
+        partial_payload = None
+        for _ in range(80):
+            detail_response = client.get(f"/api/meetings/{meeting_id}")
+            assert detail_response.status_code == 200
+            payload = detail_response.json()
+            if payload["transcript_count"] > 0 and payload["summary"] is None:
+                partial_payload = payload
+                break
+            time.sleep(0.02)
+
+        finalized_payload = wait_for_meeting_status(client, meeting_id, "finalized")
+
+    assert partial_payload is not None
+    assert partial_payload["status"] == "processing"
+    assert partial_payload["processing_stage"] in {"translating", "analyzing", "summarizing"}
+    assert partial_payload["transcript_count"] == 3
+    assert partial_payload["summary"] is None
+    assert finalized_payload["summary"] is not None
+
+
+def test_upload_failure_marks_record_failed_and_keeps_error_message(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = FailingASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.wav", b"fake-audio", "audio/wav"),
+                "scene": (None, "general"),
+                "target_lang": (None, "en"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        failed_payload = wait_for_meeting_status(client, response.json()["meeting_id"], "failed")
+
+    assert failed_payload["source_type"] == "upload"
+    assert failed_payload["processing_stage"] is None
+    assert failed_payload["summary"] is None
+    assert failed_payload["analysis"] is None
+    assert failed_payload["error_message"] == "ASR failed in test"
+
+
+def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_uploads(tmp_path) -> None:
+    db_path = tmp_path / "meeting_history.sqlite3"
+    connection = MeetingHistoryService(db_path)._connect()
+    connection.execute("DROP TABLE meeting_transcripts")
+    connection.execute("DROP TABLE meetings")
+    connection.execute(
+        """
+        CREATE TABLE meetings (
+            meeting_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            scene TEXT NOT NULL,
+            target_lang TEXT,
+            provider TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            transcript_count INTEGER NOT NULL DEFAULT 0,
+            preview_text TEXT NOT NULL DEFAULT '',
+            summary_json TEXT,
+            analysis_json TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE meeting_transcripts (
+            meeting_id TEXT NOT NULL,
+            transcript_index INTEGER NOT NULL,
+            speaker TEXT NOT NULL,
+            speaker_is_final INTEGER NOT NULL,
+            transcript_is_final INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            start REAL NOT NULL,
+            end REAL NOT NULL,
+            translated_text TEXT,
+            translated_target_lang TEXT,
+            PRIMARY KEY (meeting_id, transcript_index)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO meetings (
+            meeting_id,
+            status,
+            scene,
+            target_lang,
+            provider,
+            created_at,
+            updated_at,
+            transcript_count,
+            preview_text,
+            summary_json,
+            analysis_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+        """,
+        (
+            "legacy-upload",
+            "processing",
+            "general",
+            "en",
+            "dashscope",
+            "2026-04-25T00:00:00Z",
+            "2026-04-25T00:00:00Z",
+            0,
+            "",
+        ),
+    )
+    connection.execute(
+        "ALTER TABLE meetings ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'"
+    )
+    connection.commit()
+    connection.close()
+
+    service = MeetingHistoryService(db_path)
+    meeting = service.get_meeting("legacy-upload")
+    assert meeting is not None
+    assert meeting.status.value == "failed"
+    assert meeting.source_type.value == "upload"
+    assert meeting.processing_stage is None
+    assert meeting.error_message == MeetingHistoryService.INTERRUPTED_UPLOAD_ERROR
+
+    migrated_connection = service._connect()
+    migrated_columns = service._get_table_columns(migrated_connection, "meetings")
+    migrated_connection.close()
+    assert {"source_type", "processing_stage", "error_message", "source_name"}.issubset(migrated_columns)

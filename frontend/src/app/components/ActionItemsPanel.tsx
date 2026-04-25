@@ -88,7 +88,7 @@ export function ActionItemsPanel({ summary, transcripts = [], readOnly = false }
   if (!summary) {
     return (
       <div className="max-w-5xl mx-auto flex items-center justify-center py-20 text-gray-500">
-        <p>Meeting action items will appear here after the session is finalized.</p>
+        <p>Meeting action items will appear here once processing is complete.</p>
       </div>
     );
   }

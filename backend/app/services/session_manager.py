@@ -15,7 +15,7 @@ from starlette.websockets import WebSocketState
 from app.clients.asr_base import ASRClient, ASRStream
 from app.core.config import Settings
 from app.schemas.analysis import MeetingAnalysis
-from app.schemas.meeting_history import MeetingHistoryStatus, SessionStarted
+from app.schemas.meeting_history import MeetingHistoryStatus, MeetingSourceType, SessionStarted
 from app.schemas.translation import TranscriptTranslation
 from app.schemas.transcript import TranscriptItem, TranscriptSegment
 from app.schemas.ws_message import SpeakerUpdate, WebSocketMessage, WebSocketMessageType
@@ -103,6 +103,7 @@ class SessionManager:
             scene=scene,
             target_lang=normalized_target_lang,
             provider=selection.provider_name,
+            source_type=MeetingSourceType.LIVE,
         )
         session = MeetingSession(
             session_id=session_id,
@@ -530,6 +531,7 @@ class SessionManager:
                     scene=session.scene,
                     target_lang=session.target_lang,
                     provider=session.active_provider,
+                    source_type=MeetingSourceType.LIVE,
                 ).model_dump(),
             ),
         )
