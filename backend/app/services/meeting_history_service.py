@@ -10,7 +10,9 @@ from app.schemas.meeting_history import (
     MeetingHistoryListItem,
     MeetingHistoryStatus,
     MeetingHistoryTranscriptItem,
+    MeetingProcessingStage,
     MeetingRecord,
+    MeetingSourceType,
 )
 from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptItem
@@ -22,10 +24,13 @@ def _utc_now_iso() -> str:
 
 
 class MeetingHistoryService:
+    INTERRUPTED_UPLOAD_ERROR = "Upload processing was interrupted before completion."
+
     def __init__(self, db_path: Path | str) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self.reconcile_processing_uploads()
 
     def create_meeting(
         self,
@@ -34,6 +39,11 @@ class MeetingHistoryService:
         scene: str,
         target_lang: str | None,
         provider: str,
+        status: MeetingHistoryStatus = MeetingHistoryStatus.DRAFT,
+        source_type: MeetingSourceType = MeetingSourceType.LIVE,
+        processing_stage: MeetingProcessingStage | None = None,
+        error_message: str | None = None,
+        source_name: str | None = None,
     ) -> str:
         timestamp = _utc_now_iso()
         with self._connect() as connection:
@@ -42,6 +52,7 @@ class MeetingHistoryService:
                 INSERT INTO meetings (
                     meeting_id,
                     status,
+                    source_type,
                     scene,
                     target_lang,
                     provider,
@@ -49,18 +60,25 @@ class MeetingHistoryService:
                     updated_at,
                     transcript_count,
                     preview_text,
+                    processing_stage,
+                    error_message,
+                    source_name,
                     summary_json,
                     analysis_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, NULL, NULL)
                 """,
                 (
                     meeting_id,
-                    MeetingHistoryStatus.DRAFT.value,
+                    status.value,
+                    source_type.value,
                     scene,
                     target_lang,
                     provider,
                     timestamp,
                     timestamp,
+                    processing_stage.value if processing_stage else None,
+                    error_message,
+                    source_name,
                 ),
             )
         return timestamp
@@ -172,7 +190,12 @@ class MeetingHistoryService:
             connection.execute(
                 """
                 UPDATE meetings
-                SET summary_json = ?, status = ?, updated_at = ?
+                SET
+                    summary_json = ?,
+                    status = ?,
+                    processing_stage = NULL,
+                    error_message = NULL,
+                    updated_at = ?
                 WHERE meeting_id = ?
                 """,
                 (
@@ -183,15 +206,70 @@ class MeetingHistoryService:
                 ),
             )
 
+    def mark_processing(self, meeting_id: str, stage: MeetingProcessingStage) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE meetings
+                SET
+                    status = ?,
+                    processing_stage = ?,
+                    error_message = NULL,
+                    updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (
+                    MeetingHistoryStatus.PROCESSING.value,
+                    stage.value,
+                    _utc_now_iso(),
+                    meeting_id,
+                ),
+            )
+
+    def mark_failed(self, meeting_id: str, error_message: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE meetings
+                SET
+                    status = ?,
+                    processing_stage = NULL,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (
+                    MeetingHistoryStatus.FAILED.value,
+                    error_message,
+                    _utc_now_iso(),
+                    meeting_id,
+                ),
+            )
+
     def mark_finalized(self, meeting_id: str) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE meetings
-                SET status = ?, updated_at = ?
+                SET
+                    status = ?,
+                    processing_stage = NULL,
+                    error_message = NULL,
+                    updated_at = ?
                 WHERE meeting_id = ?
                 """,
                 (MeetingHistoryStatus.FINALIZED.value, _utc_now_iso(), meeting_id),
+            )
+
+    def update_provider(self, meeting_id: str, provider: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE meetings
+                SET provider = ?, updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (provider, _utc_now_iso(), meeting_id),
             )
 
     def list_meetings(self) -> list[MeetingHistoryListItem]:
@@ -201,13 +279,17 @@ class MeetingHistoryService:
                 SELECT
                     meeting_id,
                     status,
+                    source_type,
                     scene,
                     target_lang,
                     provider,
                     created_at,
                     updated_at,
                     transcript_count,
-                    preview_text
+                    preview_text,
+                    processing_stage,
+                    error_message,
+                    source_name
                 FROM meetings
                 ORDER BY updated_at DESC, created_at DESC
                 """
@@ -221,6 +303,7 @@ class MeetingHistoryService:
                 SELECT
                     meeting_id,
                     status,
+                    source_type,
                     scene,
                     target_lang,
                     provider,
@@ -228,6 +311,9 @@ class MeetingHistoryService:
                     updated_at,
                     transcript_count,
                     preview_text,
+                    processing_stage,
+                    error_message,
+                    source_name,
                     summary_json,
                     analysis_json
                 FROM meetings
@@ -262,6 +348,7 @@ class MeetingHistoryService:
         return MeetingRecord(
             meeting_id=meeting_row["meeting_id"],
             status=meeting_row["status"],
+            source_type=meeting_row["source_type"],
             scene=meeting_row["scene"],
             target_lang=meeting_row["target_lang"],
             provider=meeting_row["provider"],
@@ -269,6 +356,9 @@ class MeetingHistoryService:
             updated_at=meeting_row["updated_at"],
             transcript_count=meeting_row["transcript_count"],
             preview_text=meeting_row["preview_text"],
+            processing_stage=meeting_row["processing_stage"],
+            error_message=meeting_row["error_message"],
+            source_name=meeting_row["source_name"],
             transcripts=[
                 MeetingHistoryTranscriptItem(
                     transcript_index=row["transcript_index"],
@@ -292,6 +382,27 @@ class MeetingHistoryService:
             deleted = connection.execute("DELETE FROM meetings WHERE meeting_id = ?", (meeting_id,)).rowcount
         return deleted > 0
 
+    def reconcile_processing_uploads(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE meetings
+                SET
+                    status = ?,
+                    processing_stage = NULL,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE source_type = ? AND status = ?
+                """,
+                (
+                    MeetingHistoryStatus.FAILED.value,
+                    self.INTERRUPTED_UPLOAD_ERROR,
+                    _utc_now_iso(),
+                    MeetingSourceType.UPLOAD.value,
+                    MeetingHistoryStatus.PROCESSING.value,
+                ),
+            )
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -299,6 +410,7 @@ class MeetingHistoryService:
                 CREATE TABLE IF NOT EXISTS meetings (
                     meeting_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
+                    source_type TEXT NOT NULL DEFAULT 'live',
                     scene TEXT NOT NULL,
                     target_lang TEXT,
                     provider TEXT NOT NULL,
@@ -306,6 +418,9 @@ class MeetingHistoryService:
                     updated_at TEXT NOT NULL,
                     transcript_count INTEGER NOT NULL DEFAULT 0,
                     preview_text TEXT NOT NULL DEFAULT '',
+                    processing_stage TEXT,
+                    error_message TEXT,
+                    source_name TEXT,
                     summary_json TEXT,
                     analysis_json TEXT
                 )
@@ -329,6 +444,29 @@ class MeetingHistoryService:
                 )
                 """
             )
+            self._migrate_meetings_table(connection)
+
+    def _migrate_meetings_table(self, connection: sqlite3.Connection) -> None:
+        columns = self._get_table_columns(connection, "meetings")
+        if "source_type" not in columns:
+            connection.execute(
+                "ALTER TABLE meetings ADD COLUMN source_type TEXT NOT NULL DEFAULT 'live'"
+            )
+        if "processing_stage" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN processing_stage TEXT")
+        if "error_message" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN error_message TEXT")
+        if "source_name" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN source_name TEXT")
+
+        connection.execute(
+            """
+            UPDATE meetings
+            SET source_type = ?
+            WHERE source_type IS NULL OR source_type = ''
+            """,
+            (MeetingSourceType.LIVE.value,),
+        )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
@@ -336,6 +474,11 @@ class MeetingHistoryService:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
+
+    @staticmethod
+    def _get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+        rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {row["name"] for row in rows}
 
     @staticmethod
     def _build_preview_text(text: str) -> str:

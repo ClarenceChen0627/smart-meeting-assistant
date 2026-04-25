@@ -1,10 +1,32 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
 
 from app.schemas.meeting_history import MeetingHistoryListItem, MeetingRecord
 
 router = APIRouter()
+
+
+@router.post("/api/meetings/upload", response_model=MeetingRecord, status_code=status.HTTP_202_ACCEPTED)
+async def upload_meeting(
+    request: Request,
+    file: UploadFile = File(...),
+    scene: str = Form("general"),
+    target_lang: str | None = Form(None),
+    provider: str | None = Form(None),
+) -> MeetingRecord:
+    audio_data = await file.read()
+    try:
+        return await request.app.state.upload_meeting_service.start_upload(
+            audio_data=audio_data,
+            filename=file.filename,
+            content_type=file.content_type,
+            scene=scene,
+            target_lang=target_lang,
+            preferred_provider=provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/meetings", response_model=list[MeetingHistoryListItem])

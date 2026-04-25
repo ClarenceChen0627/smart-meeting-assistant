@@ -15,7 +15,9 @@ export interface SpeakerUpdate {
 }
 
 export type ASRProvider = 'volcengine' | 'dashscope'
-export type MeetingHistoryStatus = 'draft' | 'finalized'
+export type MeetingHistoryStatus = 'draft' | 'processing' | 'failed' | 'finalized'
+export type MeetingSourceType = 'live' | 'upload'
+export type MeetingProcessingStage = 'transcribing' | 'translating' | 'analyzing' | 'summarizing'
 
 export type TranslationTargetLanguage =
   | 'en'
@@ -42,6 +44,7 @@ export interface SessionStarted {
   scene: string
   target_lang: TranslationTargetLanguage | null
   provider: ASRProvider
+  source_type: MeetingSourceType
 }
 
 export type MeetingSignalType = 'agreement' | 'disagreement' | 'tension' | 'hesitation'
@@ -99,6 +102,7 @@ export interface MeetingHistoryTranscriptItem extends TranscriptItem {
 export interface MeetingHistoryListItem {
   meeting_id: string
   status: MeetingHistoryStatus
+  source_type: MeetingSourceType
   scene: string
   target_lang: TranslationTargetLanguage | null
   provider: ASRProvider
@@ -106,6 +110,9 @@ export interface MeetingHistoryListItem {
   updated_at: string
   transcript_count: number
   preview_text: string
+  processing_stage: MeetingProcessingStage | null
+  error_message: string | null
+  source_name: string | null
 }
 
 export interface MeetingRecord extends MeetingHistoryListItem {

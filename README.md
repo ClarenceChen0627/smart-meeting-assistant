@@ -53,6 +53,7 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 
 ### Frontend UX
 
+- Top-level `Live` / `Upload` mode switch that reuses the same result workspace
 - Resizable sidebar and transcript workspace on desktop
 - Scrollable transcript list
 - Bilingual transcript cards
@@ -64,17 +65,20 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 
 - SQLite-backed meeting history persistence
 - Each websocket meeting session is saved as a `draft` immediately after connection
-- Live transcript, transcript translations, meeting analysis, and final summary are stored for later review
-- Saved meetings can be reopened in a read-only history view from the frontend
+- Uploaded meetings are saved as `processing`, then transition to `finalized` or `failed`
+- History records are labeled with `source_type` (`live` or `upload`)
+- Live transcript, uploaded transcript, transcript translations, meeting analysis, and final summary are stored for later review
+- Saved meetings can be reopened in a read-only history view from the frontend, regardless of whether they came from live capture or upload
 - Unneeded meeting records can be permanently deleted from the history panel
 
-### Upload transcription
+### Upload meeting mode
 
-- `POST /api/transcribe`
-- `POST /api/transcribe/batch`
-
-Uploaded audio is normalized with `ffmpeg` before being transcribed.
-When offline diarization is enabled, uploaded files also return final speaker labels.
+- Upload one meeting audio file from the frontend `Upload` mode
+- The backend creates a persisted upload meeting record immediately and processes it asynchronously
+- Transcript appears first, then translations / analysis / summary are filled in incrementally
+- Upload results reuse the same `Transcript`, `Summary`, `Action Items`, and `Analysis` panels as live meetings
+- `POST /api/meetings/upload` is the product-facing upload workflow
+- `POST /api/transcribe` and `POST /api/transcribe/batch` remain transcript-only utility/debug endpoints
 
 ## Project Structure
 
@@ -127,6 +131,17 @@ smart-meeting-assistant/
 7. The backend periodically analyzes emotional dynamics, emits `analysis`, and stores the latest analysis snapshot.
 8. When recording stops, the frontend sends `finalize`.
 9. The backend closes the session WAV, runs offline speaker diarization, emits `speaker_update` messages, sends the final `analysis`, sends the final `summary`, marks the meeting as `finalized`, then closes the socket.
+
+## Upload Workflow
+
+1. The user switches the frontend into `Upload` mode and selects one audio file.
+2. The frontend submits `POST /api/meetings/upload` with the file, `scene`, `target_lang`, and `provider`.
+3. The backend creates a persisted meeting record with `source_type=upload`, `status=processing`, and `processing_stage=transcribing`.
+4. The backend converts the uploaded file to WAV with `ffmpeg`, runs ASR, and persists transcript rows.
+5. If translation is enabled, the backend translates each transcript row and persists the translated text.
+6. The backend generates meeting analysis, then the final summary / action items, updating the same meeting record.
+7. The frontend polls `GET /api/meetings/{meeting_id}` every few seconds and progressively renders transcript first, then analysis and summary.
+8. The upload meeting record is marked `finalized` on success or `failed` on unrecoverable processing errors.
 
 ## Requirements
 
@@ -305,6 +320,7 @@ docker-compose up --build
 - `GET /api/meetings`
 - `GET /api/meetings/{meeting_id}`
 - `DELETE /api/meetings/{meeting_id}`
+- `POST /api/meetings/upload`
 - `POST /api/transcribe`
 - `POST /api/transcribe/batch`
 
@@ -332,7 +348,8 @@ Supported websocket event types:
     "created_at": "2026-04-25T15:01:02.345678Z",
     "scene": "general",
     "target_lang": "en",
-    "provider": "volcengine"
+    "provider": "volcengine",
+    "source_type": "live"
   }
 }
 ```
@@ -476,6 +493,29 @@ Supported websocket event types:
 
 ### Meeting history responses
 
+#### `POST /api/meetings/upload`
+
+```json
+{
+  "meeting_id": "f4a6d58cb28b4d2a8d8f8d0cb014b10a",
+  "status": "processing",
+  "source_type": "upload",
+  "scene": "general",
+  "target_lang": "en",
+  "provider": "dashscope",
+  "created_at": "2026-04-26T02:10:00.000000Z",
+  "updated_at": "2026-04-26T02:10:00.000000Z",
+  "transcript_count": 0,
+  "preview_text": "",
+  "processing_stage": "transcribing",
+  "error_message": null,
+  "source_name": "meeting.wav",
+  "transcripts": [],
+  "summary": null,
+  "analysis": null
+}
+```
+
 #### `GET /api/meetings`
 
 ```json
@@ -483,13 +523,17 @@ Supported websocket event types:
   {
     "meeting_id": "1c4f8c5ef3d74f6388d48da5ef4d23a0",
     "status": "finalized",
+    "source_type": "live",
     "scene": "general",
     "target_lang": "en",
     "provider": "volcengine",
     "created_at": "2026-04-25T15:01:02.345678Z",
     "updated_at": "2026-04-25T15:08:20.123456Z",
     "transcript_count": 18,
-    "preview_text": "Let's finalize the launch plan and send the weekly report today."
+    "preview_text": "Let's finalize the launch plan and send the weekly report today.",
+    "processing_stage": null,
+    "error_message": null,
+    "source_name": null
   }
 ]
 ```
@@ -500,6 +544,7 @@ Supported websocket event types:
 {
   "meeting_id": "1c4f8c5ef3d74f6388d48da5ef4d23a0",
   "status": "finalized",
+  "source_type": "upload",
   "scene": "general",
   "target_lang": "en",
   "provider": "volcengine",
@@ -507,6 +552,9 @@ Supported websocket event types:
   "updated_at": "2026-04-25T15:08:20.123456Z",
   "transcript_count": 18,
   "preview_text": "Let's finalize the launch plan and send the weekly report today.",
+  "processing_stage": null,
+  "error_message": null,
+  "source_name": "meeting.wav",
   "transcripts": [
     {
       "transcript_index": 0,
@@ -582,7 +630,8 @@ Supported websocket event types:
 - Sentiment / engagement analysis is meeting-level, not participant-level
 - Mobile browser recording compatibility is less reliable than desktop
 - Meeting history currently stores metadata, transcripts, translations, summary, and analysis, but not raw audio files
-- Upload transcription endpoints do not create meeting history records
+- Upload processing is currently async but still in-process; there is no distributed worker queue yet
+- `POST /api/transcribe` and `POST /api/transcribe/batch` remain transcript-only utility/debug endpoints
 
 ## License
 
