@@ -13,6 +13,7 @@ import { UploadMeetingControls } from './components/UploadMeetingControls';
 import { useAudioRecording } from '../hooks/useAudioRecording';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type {
+  ActionItemStatus,
   ASRProvider,
   MeetingAnalysis,
   MeetingHistoryListItem,
@@ -21,6 +22,7 @@ import type {
   MeetingRecord,
   MeetingSourceType,
   MeetingSummary,
+  MeetingSummaryUpdate,
   TranscriptItem,
   TranslationTargetLanguage,
 } from '../types';
@@ -114,6 +116,9 @@ const toHistoryListItem = (meeting: MeetingRecord): MeetingHistoryListItem => ({
   provider: meeting.provider,
   created_at: meeting.created_at,
   updated_at: meeting.updated_at,
+  title: meeting.title,
+  title_manually_edited: meeting.title_manually_edited,
+  summary_manually_edited: meeting.summary_manually_edited,
   transcript_count: meeting.transcript_count,
   preview_text: meeting.preview_text,
   processing_stage: meeting.processing_stage,
@@ -192,6 +197,7 @@ export default function App() {
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [loadingMeetingId, setLoadingMeetingId] = useState<string | null>(null);
   const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
+  const [isSavingSummary, setIsSavingSummary] = useState(false);
 
   const [statusMessage, setStatusMessage] = useState('Ready to start meeting');
   const [serverError, setServerError] = useState('');
@@ -509,6 +515,134 @@ export default function App() {
     }
   };
 
+  const handleActionItemStatusChange = async (
+    actionItemIndex: number,
+    status: ActionItemStatus
+  ) => {
+    const meetingId = displayedMeeting?.meeting_id ?? currentMeetingId;
+    if (!meetingId) {
+      return;
+    }
+
+    const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/action-items/${actionItemIndex}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status }),
+    });
+
+    if (!response.ok) {
+      let detail = `Failed to update action item status (${response.status})`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        if (payload.detail) {
+          detail = payload.detail;
+        }
+      } catch {
+        // ignore response parse failures
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json() as MeetingRecord;
+    updateHistoryFromMeeting(payload);
+
+    if (historyMeeting?.meeting_id === payload.meeting_id) {
+      setHistoryMeeting(payload);
+    }
+
+    if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
+      setActiveUploadMeeting(payload);
+    }
+
+    if (currentMeetingId === payload.meeting_id) {
+      setSummary(payload.summary);
+    }
+  };
+
+  const handleRenameMeeting = async (meetingId: string, title: string) => {
+    const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/title`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title }),
+    });
+
+    if (!response.ok) {
+      let detail = `Failed to rename meeting (${response.status})`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        if (payload.detail) {
+          detail = payload.detail;
+        }
+      } catch {
+        // ignore response parse failures
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json() as MeetingRecord;
+    updateHistoryFromMeeting(payload);
+
+    if (historyMeeting?.meeting_id === payload.meeting_id) {
+      setHistoryMeeting(payload);
+    }
+
+    if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
+      setActiveUploadMeeting(payload);
+    }
+  };
+
+  const handleSummarySave = async (meetingId: string, nextSummary: MeetingSummaryUpdate) => {
+    try {
+      setIsSavingSummary(true);
+      setServerError('');
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/summary`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(nextSummary),
+      });
+
+      if (!response.ok) {
+        let detail = `Failed to update meeting summary (${response.status})`;
+        try {
+          const payload = await response.json() as { detail?: string };
+          if (payload.detail) {
+            detail = payload.detail;
+          }
+        } catch {
+          // ignore response parse failures
+        }
+        throw new Error(detail);
+      }
+
+      const payload = await response.json() as MeetingRecord;
+      updateHistoryFromMeeting(payload);
+
+      if (historyMeeting?.meeting_id === payload.meeting_id) {
+        setHistoryMeeting(payload);
+      }
+
+      if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
+        setActiveUploadMeeting(payload);
+      }
+
+      if (currentMeetingId === payload.meeting_id) {
+        setSummary(payload.summary);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update meeting summary';
+      setServerError(message);
+      throw error;
+    } finally {
+      setIsSavingSummary(false);
+    }
+  };
+
   const displayedMeeting = historyMeeting ?? (inputMode === 'upload' ? activeUploadMeeting : null);
   const isHistoryView = historyMeeting !== null;
   const isUploadCurrentView = !isHistoryView && inputMode === 'upload';
@@ -528,6 +662,7 @@ export default function App() {
   const canSwitchInputMode = !isRecording && !isStarting && !isFinalizing;
   const selectedMeetingId = historyMeeting?.meeting_id
     ?? (inputMode === 'upload' ? activeUploadMeeting?.meeting_id ?? null : currentMeetingId);
+  const summaryMeetingId = displayedMeeting?.meeting_id ?? currentMeetingId;
 
   const displayStatusMessage = isHistoryView
     ? `Viewing saved ${sourceLabels[historyMeeting.source_type]} meeting record`
@@ -687,6 +822,7 @@ export default function App() {
         onDelete={(meetingId) => {
           void handleDeleteHistoryMeeting(meetingId);
         }}
+        onRename={(meetingId, title) => handleRenameMeeting(meetingId, title)}
         onRefresh={() => {
           void loadHistoryList();
         }}
@@ -819,13 +955,18 @@ export default function App() {
               summary={displayedSummary}
               transcripts={displayedTranscripts}
               meetingDate={displayedMeetingDate}
+              meetingId={summaryMeetingId}
+              isSaving={isSavingSummary}
+              onSaveSummary={(meetingId, nextSummary) => handleSummarySave(meetingId, nextSummary)}
+              onSaveError={setServerError}
             />
           )}
           {activeTab === 'actions' && (
             <ActionItemsPanel
               summary={displayedSummary}
               transcripts={displayedTranscripts}
-              readOnly={isHistoryView || isUploadCurrentView}
+              onStatusChange={handleActionItemStatusChange}
+              onStatusChangeError={setServerError}
             />
           )}
           {activeTab === 'analysis' && (

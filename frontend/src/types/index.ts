@@ -74,6 +74,7 @@ export interface MeetingAnalysis {
 }
 
 export interface MeetingSummary {
+  title: string
   overview: string
   key_topics: string[]
   action_items: ActionItem[]
@@ -81,11 +82,21 @@ export interface MeetingSummary {
   risks: string[]
 }
 
+export interface MeetingSummaryUpdate {
+  overview: string
+  key_topics: string[]
+  action_items: ActionItem[]
+  decisions: string[]
+  risks: string[]
+}
+
+export type ActionItemStatus = 'pending' | 'completed'
+
 export interface ActionItem {
   task: string
   assignee: string
   deadline: string
-  status: 'pending' | 'completed'
+  status: ActionItemStatus
   source_excerpt: string
   transcript_index: number | null
   is_actionable: boolean
@@ -108,6 +119,9 @@ export interface MeetingHistoryListItem {
   provider: ASRProvider
   created_at: string
   updated_at: string
+  title: string
+  title_manually_edited: boolean
+  summary_manually_edited: boolean
   transcript_count: number
   preview_text: string
   processing_stage: MeetingProcessingStage | null

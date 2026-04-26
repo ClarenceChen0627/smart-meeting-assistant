@@ -14,7 +14,7 @@ from app.schemas.meeting_history import (
     MeetingRecord,
     MeetingSourceType,
 )
-from app.schemas.summary import MeetingSummary
+from app.schemas.summary import ActionItemStatus, MeetingSummary, SummaryUpdate
 from app.schemas.transcript import TranscriptItem
 from app.schemas.translation import TranscriptTranslation
 
@@ -58,6 +58,9 @@ class MeetingHistoryService:
                     provider,
                     created_at,
                     updated_at,
+                    title,
+                    title_manually_edited,
+                    summary_manually_edited,
                     transcript_count,
                     preview_text,
                     processing_stage,
@@ -65,7 +68,7 @@ class MeetingHistoryService:
                     source_name,
                     summary_json,
                     analysis_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, 0, '', ?, ?, ?, NULL, NULL)
                 """,
                 (
                     meeting_id,
@@ -186,12 +189,19 @@ class MeetingHistoryService:
             )
 
     def update_summary(self, meeting_id: str, summary: MeetingSummary) -> None:
+        generated_title = self._build_meeting_title(summary)
+        preview_text = self._build_summary_preview(summary)
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE meetings
                 SET
                     summary_json = ?,
+                    title = CASE
+                        WHEN title_manually_edited = 1 THEN title
+                        ELSE ?
+                    END,
+                    preview_text = ?,
                     status = ?,
                     processing_stage = NULL,
                     error_message = NULL,
@@ -200,11 +210,119 @@ class MeetingHistoryService:
                 """,
                 (
                     json.dumps(summary.model_dump()),
+                    generated_title,
+                    preview_text,
                     MeetingHistoryStatus.FINALIZED.value,
                     _utc_now_iso(),
                     meeting_id,
                 ),
             )
+
+    def update_title(self, meeting_id: str, title: str) -> MeetingRecord | None:
+        normalized_title = " ".join(title.split()).strip()
+        if not normalized_title:
+            raise ValueError("Meeting title cannot be empty.")
+        if len(normalized_title) > 80:
+            raise ValueError("Meeting title must be 80 characters or fewer.")
+
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE meetings
+                SET title = ?, title_manually_edited = 1, updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (normalized_title, _utc_now_iso(), meeting_id),
+            ).rowcount
+
+        if updated == 0:
+            return None
+        return self.get_meeting(meeting_id)
+
+    def update_summary_fields(self, meeting_id: str, update: SummaryUpdate) -> MeetingRecord | None:
+        with self._connect() as connection:
+            meeting_row = connection.execute(
+                """
+                SELECT summary_json
+                FROM meetings
+                WHERE meeting_id = ?
+                """,
+                (meeting_id,),
+            ).fetchone()
+            if meeting_row is None:
+                return None
+
+            summary_json = meeting_row["summary_json"]
+            if not summary_json:
+                raise ValueError("Meeting summary is not available.")
+
+            existing_summary = MeetingSummary.model_validate_json(summary_json)
+            updated_summary = existing_summary.model_copy(
+                update={
+                    "overview": update.overview,
+                    "key_topics": self._clean_string_list(update.key_topics),
+                    "decisions": self._clean_string_list(update.decisions),
+                    "risks": self._clean_string_list(update.risks),
+                    "action_items": update.action_items,
+                }
+            )
+            connection.execute(
+                """
+                UPDATE meetings
+                SET
+                    summary_json = ?,
+                    preview_text = ?,
+                    summary_manually_edited = 1,
+                    updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (
+                    json.dumps(updated_summary.model_dump()),
+                    self._build_summary_preview(updated_summary),
+                    _utc_now_iso(),
+                    meeting_id,
+                ),
+            )
+
+        return self.get_meeting(meeting_id)
+
+    def update_action_item_status(
+        self,
+        meeting_id: str,
+        action_item_index: int,
+        status: ActionItemStatus,
+    ) -> MeetingRecord | None:
+        with self._connect() as connection:
+            meeting_row = connection.execute(
+                """
+                SELECT summary_json
+                FROM meetings
+                WHERE meeting_id = ?
+                """,
+                (meeting_id,),
+            ).fetchone()
+            if meeting_row is None:
+                return None
+
+            summary_json = meeting_row["summary_json"]
+            if not summary_json:
+                raise ValueError("Meeting summary is not available.")
+
+            summary = MeetingSummary.model_validate_json(summary_json)
+            if action_item_index < 0 or action_item_index >= len(summary.action_items):
+                raise IndexError("Action item not found.")
+
+            summary.action_items[action_item_index].status = status
+            connection.execute(
+                """
+                UPDATE meetings
+                SET summary_json = ?, updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (json.dumps(summary.model_dump()), _utc_now_iso(), meeting_id),
+            )
+
+        return self.get_meeting(meeting_id)
 
     def mark_processing(self, meeting_id: str, stage: MeetingProcessingStage) -> None:
         with self._connect() as connection:
@@ -285,6 +403,9 @@ class MeetingHistoryService:
                     provider,
                     created_at,
                     updated_at,
+                    title,
+                    title_manually_edited,
+                    summary_manually_edited,
                     transcript_count,
                     preview_text,
                     processing_stage,
@@ -309,6 +430,9 @@ class MeetingHistoryService:
                     provider,
                     created_at,
                     updated_at,
+                    title,
+                    title_manually_edited,
+                    summary_manually_edited,
                     transcript_count,
                     preview_text,
                     processing_stage,
@@ -354,6 +478,9 @@ class MeetingHistoryService:
             provider=meeting_row["provider"],
             created_at=meeting_row["created_at"],
             updated_at=meeting_row["updated_at"],
+            title=meeting_row["title"],
+            title_manually_edited=bool(meeting_row["title_manually_edited"]),
+            summary_manually_edited=bool(meeting_row["summary_manually_edited"]),
             transcript_count=meeting_row["transcript_count"],
             preview_text=meeting_row["preview_text"],
             processing_stage=meeting_row["processing_stage"],
@@ -416,6 +543,9 @@ class MeetingHistoryService:
                     provider TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    title_manually_edited INTEGER NOT NULL DEFAULT 0,
+                    summary_manually_edited INTEGER NOT NULL DEFAULT 0,
                     transcript_count INTEGER NOT NULL DEFAULT 0,
                     preview_text TEXT NOT NULL DEFAULT '',
                     processing_stage TEXT,
@@ -458,6 +588,16 @@ class MeetingHistoryService:
             connection.execute("ALTER TABLE meetings ADD COLUMN error_message TEXT")
         if "source_name" not in columns:
             connection.execute("ALTER TABLE meetings ADD COLUMN source_name TEXT")
+        if "title" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        if "title_manually_edited" not in columns:
+            connection.execute(
+                "ALTER TABLE meetings ADD COLUMN title_manually_edited INTEGER NOT NULL DEFAULT 0"
+            )
+        if "summary_manually_edited" not in columns:
+            connection.execute(
+                "ALTER TABLE meetings ADD COLUMN summary_manually_edited INTEGER NOT NULL DEFAULT 0"
+            )
 
         connection.execute(
             """
@@ -484,3 +624,37 @@ class MeetingHistoryService:
     def _build_preview_text(text: str) -> str:
         normalized = " ".join(text.split())
         return normalized[:160]
+
+    @staticmethod
+    def _clean_string_list(items: list[str]) -> list[str]:
+        return [normalized for item in items if (normalized := " ".join(item.split()))]
+
+    @classmethod
+    def _build_meeting_title(cls, summary: MeetingSummary) -> str:
+        candidates = [
+            summary.title,
+            summary.key_topics[0] if summary.key_topics else "",
+            cls._first_sentence(summary.overview),
+        ]
+        for candidate in candidates:
+            normalized = " ".join(candidate.split()).strip(" -:：，,。.")
+            if normalized:
+                return normalized[:80]
+        return ""
+
+    @classmethod
+    def _build_summary_preview(cls, summary: MeetingSummary) -> str:
+        overview = " ".join(summary.overview.split())
+        if overview:
+            return overview[:160]
+        if summary.key_topics:
+            return " / ".join(summary.key_topics)[:160]
+        return ""
+
+    @staticmethod
+    def _first_sentence(text: str) -> str:
+        normalized = " ".join(text.split())
+        for separator in ("。", ".", "!", "?", "！", "？", "\n"):
+            if separator in normalized:
+                return normalized.split(separator, 1)[0]
+        return normalized

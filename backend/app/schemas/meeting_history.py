@@ -47,6 +47,9 @@ class MeetingHistoryListItem(BaseModel):
     provider: str
     created_at: str
     updated_at: str
+    title: str = ""
+    title_manually_edited: bool = False
+    summary_manually_edited: bool = False
     transcript_count: int = 0
     preview_text: str = ""
     processing_stage: MeetingProcessingStage | None = None
@@ -68,6 +71,9 @@ class MeetingRecord(BaseModel):
     provider: str
     created_at: str
     updated_at: str
+    title: str = ""
+    title_manually_edited: bool = False
+    summary_manually_edited: bool = False
     transcript_count: int = 0
     preview_text: str = ""
     processing_stage: MeetingProcessingStage | None = None
@@ -76,3 +82,7 @@ class MeetingRecord(BaseModel):
     transcripts: list[MeetingHistoryTranscriptItem] = Field(default_factory=list)
     summary: MeetingSummary | None = None
     analysis: MeetingAnalysis | None = None
+
+
+class MeetingTitleUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=80)

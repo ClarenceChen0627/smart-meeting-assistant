@@ -1,9 +1,10 @@
 import { Calendar, CheckCircle2, Circle, Clock, User } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { ActionItem as SummaryActionItem, MeetingSummary, TranscriptItem } from '../../types';
+import type { ActionItem as SummaryActionItem, ActionItemStatus, MeetingSummary, TranscriptItem } from '../../types';
 
 interface ActionItemViewModel extends SummaryActionItem {
   id: string;
+  actionItemIndex: number;
   priority: 'high' | 'medium' | 'low';
   timestamp: string;
 }
@@ -12,6 +13,8 @@ interface ActionItemsPanelProps {
   summary: MeetingSummary | null;
   transcripts?: TranscriptItem[];
   readOnly?: boolean;
+  onStatusChange?: (actionItemIndex: number, status: ActionItemStatus) => Promise<void> | void;
+  onStatusChangeError?: (message: string) => void;
 }
 
 const priorityColors = {
@@ -52,34 +55,60 @@ const formatTimestamp = (item: SummaryActionItem, transcripts: TranscriptItem[])
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-export function ActionItemsPanel({ summary, transcripts = [], readOnly = false }: ActionItemsPanelProps) {
+export function ActionItemsPanel({
+  summary,
+  transcripts = [],
+  readOnly = false,
+  onStatusChange,
+  onStatusChangeError,
+}: ActionItemsPanelProps) {
   const [items, setItems] = useState<ActionItemViewModel[]>([]);
+  const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
 
   useEffect(() => {
     if (summary?.action_items?.length) {
       setItems(summary.action_items
-        .filter((item) => item.is_actionable)
         .map((item, index) => ({
           ...item,
           id: `action-${index}`,
+          actionItemIndex: index,
           priority: inferPriority(item.task),
           timestamp: formatTimestamp(item, transcripts),
-        })));
+        }))
+        .filter((item) => item.is_actionable));
     } else {
       setItems([]);
     }
   }, [summary, transcripts]);
 
-  const toggleStatus = (id: string) => {
+  const toggleStatus = async (id: string) => {
     if (readOnly) {
       return;
     }
-    setItems((prev) => prev.map((item) => {
-      if (item.id === id) {
-        return { ...item, status: item.status === 'completed' ? 'pending' : 'completed' };
-      }
-      return item;
-    }));
+
+    const currentItem = items.find((item) => item.id === id);
+    if (!currentItem || updatingItemId === id) {
+      return;
+    }
+
+    const previousStatus = currentItem.status;
+    const nextStatus: ActionItemStatus = previousStatus === 'completed' ? 'pending' : 'completed';
+
+    setUpdatingItemId(id);
+    setItems((prev) => prev.map((item) =>
+      item.id === id ? { ...item, status: nextStatus } : item
+    ));
+
+    try {
+      await onStatusChange?.(currentItem.actionItemIndex, nextStatus);
+    } catch (error) {
+      setItems((prev) => prev.map((item) =>
+        item.id === id ? { ...item, status: previousStatus } : item
+      ));
+      onStatusChangeError?.(error instanceof Error ? error.message : 'Failed to update action item status');
+    } finally {
+      setUpdatingItemId(null);
+    }
   };
 
   const pendingItems = items.filter((item) => item.status !== 'completed');
@@ -127,9 +156,13 @@ export function ActionItemsPanel({ summary, transcripts = [], readOnly = false }
               <div key={item.id} className="p-6 hover:bg-gray-50 transition-colors">
                 <div className="flex items-start gap-4">
                   <button
-                    onClick={() => toggleStatus(item.id)}
-                    disabled={readOnly}
-                    className={`mt-1 flex-shrink-0 ${statusColors[item.status]}`}
+                    onClick={() => {
+                      void toggleStatus(item.id);
+                    }}
+                    disabled={readOnly || updatingItemId === item.id}
+                    className={`mt-1 flex-shrink-0 ${statusColors[item.status]} ${
+                      readOnly || updatingItemId === item.id ? 'cursor-not-allowed opacity-60' : ''
+                    }`}
                   >
                     <Circle className="w-5 h-5" />
                   </button>
@@ -183,9 +216,13 @@ export function ActionItemsPanel({ summary, transcripts = [], readOnly = false }
               <div key={item.id} className="p-6 hover:bg-gray-50 transition-colors opacity-60">
                 <div className="flex items-start gap-4">
                   <button
-                    onClick={() => toggleStatus(item.id)}
-                    disabled={readOnly}
-                    className={`mt-1 flex-shrink-0 ${statusColors[item.status]}`}
+                    onClick={() => {
+                      void toggleStatus(item.id);
+                    }}
+                    disabled={readOnly || updatingItemId === item.id}
+                    className={`mt-1 flex-shrink-0 ${statusColors[item.status]} ${
+                      readOnly || updatingItemId === item.id ? 'cursor-not-allowed opacity-60' : ''
+                    }`}
                   >
                     <CheckCircle2 className="w-5 h-5" />
                   </button>

@@ -1,4 +1,5 @@
-import { CalendarDays, FileClock, Loader2, Trash2 } from 'lucide-react';
+import { Check, CalendarDays, FileClock, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import { useState } from 'react';
 
 import type { MeetingHistoryListItem } from '../../types';
 import {
@@ -31,6 +32,7 @@ interface MeetingHistorySheetProps {
   deletingMeetingId: string | null;
   onSelect: (meetingId: string) => void;
   onDelete: (meetingId: string) => void;
+  onRename: (meetingId: string, title: string) => Promise<void> | void;
   onRefresh: () => void;
 }
 
@@ -60,6 +62,19 @@ const formatTimestamp = (value: string) =>
     minute: '2-digit',
   }).format(new Date(value));
 
+const buildMeetingTitle = (meeting: MeetingHistoryListItem) => {
+  const title = meeting.title.trim();
+  if (title) {
+    return title;
+  }
+
+  if (meeting.source_name) {
+    return meeting.source_name.replace(/\.[^/.]+$/, '');
+  }
+
+  return `${sceneLabels[meeting.scene] || meeting.scene} ${formatTimestamp(meeting.created_at)}`;
+};
+
 export function MeetingHistorySheet({
   open,
   onOpenChange,
@@ -70,8 +85,45 @@ export function MeetingHistorySheet({
   deletingMeetingId,
   onSelect,
   onDelete,
+  onRename,
   onRefresh,
 }: MeetingHistorySheetProps) {
+  const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [renamingMeetingId, setRenamingMeetingId] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const startRename = (meeting: MeetingHistoryListItem) => {
+    setEditingMeetingId(meeting.meeting_id);
+    setDraftTitle(buildMeetingTitle(meeting));
+    setRenameError(null);
+  };
+
+  const cancelRename = () => {
+    setEditingMeetingId(null);
+    setDraftTitle('');
+    setRenameError(null);
+  };
+
+  const saveRename = async (meetingId: string) => {
+    const normalizedTitle = draftTitle.trim();
+    if (!normalizedTitle) {
+      setRenameError('Meeting title cannot be empty.');
+      return;
+    }
+
+    try {
+      setRenamingMeetingId(meetingId);
+      setRenameError(null);
+      await onRename(meetingId, normalizedTitle);
+      cancelRename();
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : 'Failed to rename meeting.');
+    } finally {
+      setRenamingMeetingId(null);
+    }
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-xl">
@@ -113,6 +165,8 @@ export function MeetingHistorySheet({
                 const isSelected = selectedMeetingId === meeting.meeting_id;
                 const isOpening = loadingMeetingId === meeting.meeting_id;
                 const isDeleting = deletingMeetingId === meeting.meeting_id;
+                const isEditing = editingMeetingId === meeting.meeting_id;
+                const isRenaming = renamingMeetingId === meeting.meeting_id;
 
                 return (
                   <div
@@ -122,12 +176,7 @@ export function MeetingHistorySheet({
                     }`}
                   >
                     <div className="flex items-start gap-3">
-                      <button
-                        type="button"
-                        onClick={() => onSelect(meeting.meeting_id)}
-                        disabled={isOpening || isDeleting}
-                        className="flex-1 text-left"
-                      >
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className={`rounded-full border px-2 py-0.5 text-xs ${statusClasses[meeting.status]}`}>
                             {meeting.status}
@@ -141,7 +190,60 @@ export function MeetingHistorySheet({
                           )}
                         </div>
 
-                        <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
+                        {isEditing ? (
+                          <form
+                            className="mt-3 flex items-center gap-2"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void saveRename(meeting.meeting_id);
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              value={draftTitle}
+                              maxLength={80}
+                              onChange={(event) => setDraftTitle(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Escape') {
+                                  event.preventDefault();
+                                  cancelRename();
+                                }
+                              }}
+                              disabled={isRenaming}
+                              className="min-w-0 flex-1 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                            />
+                            <button
+                              type="submit"
+                              disabled={isRenaming}
+                              className="rounded-lg border border-green-200 p-2 text-green-600 transition-colors hover:bg-green-50 disabled:cursor-wait disabled:opacity-60"
+                              aria-label="Save meeting title"
+                            >
+                              {isRenaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelRename}
+                              disabled={isRenaming}
+                              className="rounded-lg border border-gray-200 p-2 text-gray-500 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              aria-label="Cancel meeting title edit"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </form>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onSelect(meeting.meeting_id)}
+                            disabled={isOpening || isDeleting}
+                            className="mt-3 block w-full text-left disabled:cursor-wait"
+                          >
+                            <h3 className="text-sm font-medium text-gray-900">
+                              {buildMeetingTitle(meeting)}
+                            </h3>
+                          </button>
+                        )}
+
+                        <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
                           <span className="flex items-center gap-1">
                             <CalendarDays className="h-3.5 w-3.5" />
                             {formatTimestamp(meeting.updated_at)}
@@ -153,8 +255,8 @@ export function MeetingHistorySheet({
                           )}
                         </div>
 
-                        <p className="mt-3 text-sm text-gray-700">
-                          {meeting.preview_text || 'No transcript preview available.'}
+                        <p className="mt-3 line-clamp-2 text-sm text-gray-600">
+                          {meeting.preview_text || 'No summary preview available yet.'}
                         </p>
                         {meeting.source_name && (
                           <p className="mt-2 text-xs text-gray-500">File: {meeting.source_name}</p>
@@ -162,10 +264,22 @@ export function MeetingHistorySheet({
                         {meeting.error_message && (
                           <p className="mt-2 text-xs text-red-600">{meeting.error_message}</p>
                         )}
-                      </button>
+                        {isEditing && renameError && (
+                          <p className="mt-2 text-xs text-red-600">{renameError}</p>
+                        )}
+                      </div>
 
                       <div className="flex items-center gap-2">
                         {isOpening && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
+                        <button
+                          type="button"
+                          onClick={() => startRename(meeting)}
+                          disabled={isDeleting || isRenaming}
+                          className="rounded-lg border border-gray-200 p-2 text-gray-400 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label="Rename meeting record"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <button
