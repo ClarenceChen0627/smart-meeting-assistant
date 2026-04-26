@@ -128,12 +128,13 @@ class SummaryService:
             f"Primary language hint: {language_hint}. "
             "Keep the summary concise and focused on the most important points. "
             "Required fields: "
-            "1. overview: 2-4 concise sentences summarizing the meeting. "
-            "2. key_topics: 1-5 short strings describing the main discussion themes. "
-            "3. decisions: explicit decisions, agreements, or confirmed outcomes. Use [] if none. "
-            "4. action_items: follow-up actions with task, assignee, deadline, status, source_excerpt, transcript_index, is_actionable, confidence, owner_explicit, and deadline_explicit. Include only concrete, trackable actions. Exclude vague intentions, conditions, dependencies, and support statements. Use [] if none. "
-            "5. risks: optional blockers, open questions, or unresolved risks. Use [] if none. "
-            'Return JSON in exactly this shape: {"overview":"...","key_topics":["..."],"decisions":["..."],"action_items":[{"task":"...","assignee":"...","deadline":"...","status":"pending","source_excerpt":"...","transcript_index":0,"is_actionable":true,"confidence":0.92,"owner_explicit":true,"deadline_explicit":true}],"risks":["..."]}. '
+            "1. title: a short meeting title in the transcript language, not a full sentence, ideally 4-10 words or 6-18 Chinese characters. "
+            "2. overview: 2-4 concise sentences summarizing the meeting. "
+            "3. key_topics: 1-5 short strings describing the main discussion themes. "
+            "4. decisions: explicit decisions, agreements, or confirmed outcomes. Use [] if none. "
+            "5. action_items: follow-up actions with task, assignee, deadline, status, source_excerpt, transcript_index, is_actionable, confidence, owner_explicit, and deadline_explicit. Include only concrete, trackable actions. Exclude vague intentions, conditions, dependencies, and support statements. Use [] if none. "
+            "6. risks: optional blockers, open questions, or unresolved risks. Use [] if none. "
+            'Return JSON in exactly this shape: {"title":"...","overview":"...","key_topics":["..."],"decisions":["..."],"action_items":[{"task":"...","assignee":"...","deadline":"...","status":"pending","source_excerpt":"...","transcript_index":0,"is_actionable":true,"confidence":0.92,"owner_explicit":true,"deadline_explicit":true}],"risks":["..."]}. '
             'Prefer transcript speaker names for assignee. Use "Unassigned" when unknown. '
             'Use "Not specified" when the deadline is unclear. '
             "Set owner_explicit to true when the transcript explicitly assigns or self-assigns the task. "
@@ -159,12 +160,13 @@ class SummaryService:
             "Return ONLY valid JSON and do not invent unsupported facts. "
             "Use the same primary language as the transcript and keep the wording concise. "
             f"Primary language hint: {language_hint}. "
+            "title must be a short meeting title, not a full sentence. "
             "Do not leave overview empty unless the transcript itself is empty. "
             "key_topics must contain at least one concrete discussion topic when the transcript has meaningful content. "
             "decisions and action_items may be empty when they are not supported by the transcript. "
             "If a speaker commits to a concrete task or explicitly asks someone to do something, extract it into action_items and capture assignee and deadline when possible. "
             "Do not include conditional, dependent, or non-trackable statements as action_items. "
-            'Return JSON in exactly this shape: {"overview":"...","key_topics":["..."],"decisions":["..."],"action_items":[{"task":"...","assignee":"...","deadline":"...","status":"pending","source_excerpt":"...","transcript_index":0,"is_actionable":true,"confidence":0.92,"owner_explicit":true,"deadline_explicit":true}],"risks":["..."]}. '
+            'Return JSON in exactly this shape: {"title":"...","overview":"...","key_topics":["..."],"decisions":["..."],"action_items":[{"task":"...","assignee":"...","deadline":"...","status":"pending","source_excerpt":"...","transcript_index":0,"is_actionable":true,"confidence":0.92,"owner_explicit":true,"deadline_explicit":true}],"risks":["..."]}. '
             'Use "Unassigned" when the owner is unclear and "Not specified" when the deadline is unclear. '
             "When you are unsure whether something is truly actionable, set is_actionable to false and lower confidence. "
             "Do not output markdown or explanatory text."
@@ -250,12 +252,33 @@ class SummaryService:
                     )
 
         return MeetingSummary(
+            title=self._derive_title(summary, transcripts),
             overview=summary.overview.strip(),
             key_topics=self._unique_items(summary.key_topics),
             action_items=self._normalize_action_items(action_items),
             decisions=self._unique_items(decisions),
             risks=self._unique_items(summary.risks),
         )
+
+    def _derive_title(self, summary: MeetingSummary, transcripts: list[TranscriptItem]) -> str:
+        candidates = [
+            summary.title,
+            summary.key_topics[0] if summary.key_topics else "",
+            self._first_sentence(summary.overview),
+            transcripts[0].text if transcripts else "",
+        ]
+        for candidate in candidates:
+            title = self._normalize_text(candidate)
+            if title:
+                return title[:80]
+        return ""
+
+    def _first_sentence(self, text: str) -> str:
+        normalized = " ".join(text.split())
+        for separator in ("。", ".", "!", "?", "！", "？"):
+            if separator in normalized:
+                return normalized.split(separator, 1)[0]
+        return normalized
 
     def _split_clauses(self, text: str) -> list[str]:
         return [part.strip() for part in self._CLAUSE_SPLIT_PATTERN.split(text) if part.strip()]

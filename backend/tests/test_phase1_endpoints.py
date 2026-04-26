@@ -103,6 +103,7 @@ class StubSummaryService:
 
     async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
         return MeetingSummary(
+            title="Meeting plan follow-up",
             overview="The team reviewed the meeting plan and wrapped with a final follow-up action.",
             key_topics=["Meeting plan", "Follow-up"],
             action_items=[
@@ -407,6 +408,7 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
     assert detail_response.status_code == 200
     detail_payload = detail_response.json()
     assert detail_payload["status"] == "finalized"
+    assert detail_payload["title"] == "Meeting plan follow-up"
     assert detail_payload["transcript_count"] == 2
     assert detail_payload["summary"]["overview"].startswith("The team reviewed")
     assert [item["speaker"] for item in detail_payload["transcripts"]] == ["Speaker 1", "Speaker 2"]
@@ -637,7 +639,8 @@ def test_meeting_history_persists_translation_latest_analysis_and_delete(tmp_pat
     assert detail_payload["transcripts"][0]["translated_text"] == "[ja] Hello team"
     assert detail_payload["transcripts"][0]["translated_target_lang"] == "ja"
     assert list_response.status_code == 200
-    assert list_response.json()[0]["preview_text"] == "I will send the update today"
+    assert list_response.json()[0]["title"] == "Meeting plan follow-up"
+    assert list_response.json()[0]["preview_text"].startswith("The team reviewed")
     assert delete_response.status_code == 204
     assert missing_detail_response.status_code == 404
 
@@ -687,6 +690,7 @@ def test_upload_endpoint_creates_processing_record_and_finalizes_with_results(tm
         list_response = client.get("/api/meetings")
 
     assert finalized_payload["source_type"] == "upload"
+    assert finalized_payload["title"] == "Meeting plan follow-up"
     assert finalized_payload["processing_stage"] is None
     assert finalized_payload["error_message"] is None
     assert finalized_payload["transcript_count"] == 3
@@ -696,6 +700,7 @@ def test_upload_endpoint_creates_processing_record_and_finalizes_with_results(tm
     assert finalized_payload["transcripts"][0]["translated_target_lang"] == "ja"
     assert list_response.status_code == 200
     assert list_response.json()[0]["source_type"] == "upload"
+    assert list_response.json()[0]["title"] == "Meeting plan follow-up"
 
 
 def test_upload_detail_polling_returns_partial_results_before_summary(tmp_path) -> None:
@@ -798,6 +803,230 @@ def test_upload_failure_marks_record_failed_and_keeps_error_message(tmp_path) ->
     assert failed_payload["error_message"] == "ASR failed in test"
 
 
+def test_meeting_action_item_status_update_is_persisted(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="meeting-with-actions",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.update_summary(
+        "meeting-with-actions",
+        MeetingSummary(
+            title="Follow-up review",
+            overview="Follow-up review.",
+            action_items=[
+                {
+                    "task": "Send the recap",
+                    "assignee": "Speaker 1",
+                    "deadline": "Today",
+                    "status": "pending",
+                    "source_excerpt": "I will send the recap today.",
+                    "transcript_index": 0,
+                    "is_actionable": True,
+                    "confidence": 0.9,
+                    "owner_explicit": True,
+                    "deadline_explicit": True,
+                }
+            ],
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/meetings/meeting-with-actions/action-items/0",
+            json={"status": "completed"},
+        )
+        detail_response = client.get("/api/meetings/meeting-with-actions")
+        missing_action_response = client.patch(
+            "/api/meetings/meeting-with-actions/action-items/2",
+            json={"status": "completed"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["action_items"][0]["status"] == "completed"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["summary"]["action_items"][0]["status"] == "completed"
+    assert missing_action_response.status_code == 404
+
+
+def test_meeting_title_update_is_manual_and_not_overwritten_by_summary(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="meeting-with-title",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.update_summary(
+        "meeting-with-title",
+        MeetingSummary(
+            title="Generated title",
+            overview="The first generated summary.",
+            key_topics=["Generated topic"],
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        rename_response = client.patch(
+            "/api/meetings/meeting-with-title/title",
+            json={"title": "Manual project review"},
+        )
+        blank_title_response = client.patch(
+            "/api/meetings/meeting-with-title/title",
+            json={"title": "   "},
+        )
+
+    history_service.update_summary(
+        "meeting-with-title",
+        MeetingSummary(
+            title="Regenerated title",
+            overview="The second generated summary.",
+            key_topics=["Regenerated topic"],
+        ),
+    )
+    meeting = history_service.get_meeting("meeting-with-title")
+
+    assert rename_response.status_code == 200
+    assert rename_response.json()["title"] == "Manual project review"
+    assert rename_response.json()["title_manually_edited"] is True
+    assert blank_title_response.status_code == 400
+    assert meeting is not None
+    assert meeting.title == "Manual project review"
+    assert meeting.title_manually_edited is True
+    assert meeting.preview_text == "The second generated summary."
+
+
+def test_meeting_summary_update_is_persisted_and_marks_manual(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="meeting-with-summary",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.update_summary(
+        "meeting-with-summary",
+        MeetingSummary(
+            title="Generated title",
+            overview="Generated overview.",
+            key_topics=["Generated topic"],
+            action_items=[
+                {
+                    "task": "Generated action",
+                    "assignee": "Speaker 1",
+                    "deadline": "Today",
+                    "status": "pending",
+                    "source_excerpt": "I will send it today.",
+                    "transcript_index": 0,
+                    "is_actionable": True,
+                    "confidence": 0.8,
+                    "owner_explicit": True,
+                    "deadline_explicit": True,
+                }
+            ],
+            decisions=["Generated decision"],
+            risks=[],
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        update_response = client.patch(
+            "/api/meetings/meeting-with-summary/summary",
+            json={
+                "overview": "Edited overview.",
+                "key_topics": ["Edited topic", "  "],
+                "decisions": ["Edited decision"],
+                "risks": ["Edited risk"],
+                "action_items": [
+                    {
+                        "task": "Edited action",
+                        "assignee": "Speaker 2",
+                        "deadline": "Tomorrow",
+                        "status": "completed",
+                        "source_excerpt": "Edited source.",
+                        "transcript_index": None,
+                        "is_actionable": True,
+                        "confidence": 0.7,
+                        "owner_explicit": False,
+                        "deadline_explicit": False,
+                    }
+                ],
+            },
+        )
+        detail_response = client.get("/api/meetings/meeting-with-summary")
+        status_response = client.patch(
+            "/api/meetings/meeting-with-summary/action-items/0",
+            json={"status": "pending"},
+        )
+        missing_response = client.patch(
+            "/api/meetings/missing-meeting/summary",
+            json={
+                "overview": "Missing",
+                "key_topics": [],
+                "decisions": [],
+                "risks": [],
+                "action_items": [],
+            },
+        )
+
+    assert update_response.status_code == 200
+    payload = update_response.json()
+    assert payload["title"] == "Generated title"
+    assert payload["summary_manually_edited"] is True
+    assert payload["preview_text"] == "Edited overview."
+    assert payload["summary"]["overview"] == "Edited overview."
+    assert payload["summary"]["key_topics"] == ["Edited topic"]
+    assert payload["summary"]["action_items"][0]["status"] == "completed"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["summary_manually_edited"] is True
+    assert detail_response.json()["summary"]["risks"] == ["Edited risk"]
+    assert status_response.status_code == 200
+    assert status_response.json()["summary"]["action_items"][0]["status"] == "pending"
+    assert missing_response.status_code == 404
+
+
+def test_meeting_summary_update_requires_existing_summary(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="meeting-without-summary",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/meetings/meeting-without-summary/summary",
+            json={
+                "overview": "Edited overview.",
+                "key_topics": [],
+                "decisions": [],
+                "risks": [],
+                "action_items": [],
+            },
+        )
+
+    assert response.status_code == 409
+
+
 def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_uploads(tmp_path) -> None:
     db_path = tmp_path / "meeting_history.sqlite3"
     connection = MeetingHistoryService(db_path)._connect()
@@ -882,4 +1111,12 @@ def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_u
     migrated_connection = service._connect()
     migrated_columns = service._get_table_columns(migrated_connection, "meetings")
     migrated_connection.close()
-    assert {"source_type", "processing_stage", "error_message", "source_name"}.issubset(migrated_columns)
+    assert {
+        "source_type",
+        "processing_stage",
+        "error_message",
+        "source_name",
+        "title",
+        "title_manually_edited",
+        "summary_manually_edited",
+    }.issubset(migrated_columns)

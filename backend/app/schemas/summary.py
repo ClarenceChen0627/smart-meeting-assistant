@@ -5,11 +5,14 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+ActionItemStatus = Literal["pending", "completed"]
+
+
 class ActionItem(BaseModel):
     task: str
     assignee: str = "Unassigned"
     deadline: str = "Not specified"
-    status: Literal["pending", "completed"] = "pending"
+    status: ActionItemStatus = "pending"
     source_excerpt: str = ""
     transcript_index: int | None = None
     is_actionable: bool = True
@@ -19,6 +22,7 @@ class ActionItem(BaseModel):
 
 
 class MeetingSummary(BaseModel):
+    title: str = ""
     overview: str = ""
     key_topics: list[str] = Field(default_factory=list)
     action_items: list[ActionItem] = Field(default_factory=list)
@@ -28,3 +32,15 @@ class MeetingSummary(BaseModel):
     @classmethod
     def empty(cls) -> "MeetingSummary":
         return cls()
+
+
+class ActionItemStatusUpdate(BaseModel):
+    status: ActionItemStatus
+
+
+class SummaryUpdate(BaseModel):
+    overview: str = ""
+    key_topics: list[str] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    action_items: list[ActionItem] = Field(default_factory=list)

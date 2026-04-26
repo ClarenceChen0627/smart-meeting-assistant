@@ -23,6 +23,7 @@ def test_generate_summary_parses_docs_aligned_fields() -> None:
     client = StubDashScopeClient(
         """
         {
+          "title": "Weekly Report Delivery",
           "overview": "The team reviewed the weekly report and aligned on the delivery plan. They confirmed the final owner and timeline for the update.",
           "key_topics": ["Weekly report", "Delivery plan"],
           "decisions": ["Finalize the weekly report on Friday"],
@@ -60,6 +61,7 @@ def test_generate_summary_parses_docs_aligned_fields() -> None:
     summary = asyncio.run(service.generate_summary(transcripts, "general"))
 
     assert summary.overview.startswith("The team reviewed")
+    assert summary.title == "Weekly Report Delivery"
     assert summary.key_topics == ["Weekly report", "Delivery plan"]
     assert summary.decisions == ["Finalize the weekly report on Friday"]
     assert len(summary.action_items) == 1
@@ -77,6 +79,7 @@ def test_generate_summary_retries_when_overview_or_key_topics_are_missing() -> N
         [
             """
             {
+              "title": "",
               "overview": "",
               "key_topics": [],
               "decisions": [],
@@ -86,6 +89,7 @@ def test_generate_summary_retries_when_overview_or_key_topics_are_missing() -> N
             """,
             """
             {
+              "title": "Launch plan status update",
               "overview": "The meeting focused on the launch plan and clarified who will send the status update. The team left with one concrete follow-up action.",
               "key_topics": ["Launch plan", "Status update"],
               "decisions": ["Proceed with the launch status update"],
@@ -111,6 +115,7 @@ def test_generate_summary_retries_when_overview_or_key_topics_are_missing() -> N
     summary = asyncio.run(service.generate_summary(transcripts, "general"))
 
     assert client.call_count == 2
+    assert summary.title == "Launch plan status update"
     assert summary.overview.startswith("The meeting focused on the launch plan")
     assert summary.key_topics == ["Launch plan", "Status update"]
     assert summary.action_items
@@ -146,6 +151,7 @@ def test_generate_summary_augments_action_items_from_transcripts_when_missing() 
     summary = asyncio.run(service.generate_summary(transcripts, "general"))
 
     assert summary.action_items
+    assert summary.title == "Updated deck"
     first_item = summary.action_items[0]
     assert first_item.assignee == "Speaker 2"
     assert first_item.deadline == "by Friday"
