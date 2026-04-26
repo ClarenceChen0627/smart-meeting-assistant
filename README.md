@@ -30,11 +30,14 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 
 - Final summary after recording stops
 - Structured output:
+  - `title`
   - `overview`
   - `key_topics`
   - `decisions`
   - `action_items`
   - `risks`
+- Generated meeting titles can be renamed by the user
+- Summary content can be edited after generation, including overview, topics, decisions, risks, and action item details
 
 ### Meeting analysis
 
@@ -59,6 +62,9 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 - Bilingual transcript cards
 - Separate Meeting Summary and Meeting Analysis panels
 - In-app meeting history drawer with saved record selection and deletion
+- Saved meeting titles can be renamed
+- Action item completion status can be updated from current or historical meetings
+- Generated summaries can be corrected from the Summary panel
 - Optional Windows portable Electron desktop client
 
 ### Meeting history
@@ -68,7 +74,8 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 - Uploaded meetings are saved as `processing`, then transition to `finalized` or `failed`
 - History records are labeled with `source_type` (`live` or `upload`)
 - Live transcript, uploaded transcript, transcript translations, meeting analysis, and final summary are stored for later review
-- Saved meetings can be reopened in a read-only history view from the frontend, regardless of whether they came from live capture or upload
+- Saved meetings can be reopened from the frontend, regardless of whether they came from live capture or upload
+- Meeting titles, summary fields, and action item status/content can be edited and persisted
 - Unneeded meeting records can be permanently deleted from the history panel
 
 ### Upload meeting mode
@@ -319,6 +326,9 @@ docker-compose up --build
 - `GET /api/health`
 - `GET /api/meetings`
 - `GET /api/meetings/{meeting_id}`
+- `PATCH /api/meetings/{meeting_id}/title`
+- `PATCH /api/meetings/{meeting_id}/summary`
+- `PATCH /api/meetings/{meeting_id}/action-items/{action_item_index}`
 - `DELETE /api/meetings/{meeting_id}`
 - `POST /api/meetings/upload`
 - `POST /api/transcribe`
@@ -447,6 +457,7 @@ Supported websocket event types:
 {
   "type": "summary",
   "data": {
+    "title": "Weekly Report Delivery",
     "overview": "The team reviewed the weekly report and aligned on the delivery plan. They confirmed the final owner and timeline for the update.",
     "key_topics": [
       "Weekly report",
@@ -505,6 +516,9 @@ Supported websocket event types:
   "provider": "dashscope",
   "created_at": "2026-04-26T02:10:00.000000Z",
   "updated_at": "2026-04-26T02:10:00.000000Z",
+  "title": "",
+  "title_manually_edited": false,
+  "summary_manually_edited": false,
   "transcript_count": 0,
   "preview_text": "",
   "processing_stage": "transcribing",
@@ -529,8 +543,11 @@ Supported websocket event types:
     "provider": "volcengine",
     "created_at": "2026-04-25T15:01:02.345678Z",
     "updated_at": "2026-04-25T15:08:20.123456Z",
+    "title": "Launch Plan Review",
+    "title_manually_edited": false,
+    "summary_manually_edited": false,
     "transcript_count": 18,
-    "preview_text": "Let's finalize the launch plan and send the weekly report today.",
+    "preview_text": "The team aligned on the launch plan and concrete follow-up actions.",
     "processing_stage": null,
     "error_message": null,
     "source_name": null
@@ -550,8 +567,11 @@ Supported websocket event types:
   "provider": "volcengine",
   "created_at": "2026-04-25T15:01:02.345678Z",
   "updated_at": "2026-04-25T15:08:20.123456Z",
+  "title": "Launch Plan Review",
+  "title_manually_edited": false,
+  "summary_manually_edited": false,
   "transcript_count": 18,
-  "preview_text": "Let's finalize the launch plan and send the weekly report today.",
+  "preview_text": "The team aligned on the launch plan and concrete follow-up actions.",
   "processing_stage": null,
   "error_message": null,
   "source_name": "meeting.wav",
@@ -569,6 +589,7 @@ Supported websocket event types:
     }
   ],
   "summary": {
+    "title": "Launch Plan Review",
     "overview": "The team aligned on the launch plan and concrete follow-up actions.",
     "key_topics": [
       "Launch plan"
@@ -589,6 +610,47 @@ Supported websocket event types:
     },
     "highlights": []
   }
+}
+```
+
+#### `PATCH /api/meetings/{meeting_id}/title`
+
+```json
+{
+  "title": "Customer Launch Planning"
+}
+```
+
+#### `PATCH /api/meetings/{meeting_id}/summary`
+
+```json
+{
+  "overview": "The team aligned on launch scope, owners, and next steps.",
+  "key_topics": ["Launch scope", "Owner assignment"],
+  "decisions": ["Proceed with the launch plan"],
+  "risks": ["Timeline depends on final budget approval"],
+  "action_items": [
+    {
+      "task": "Send the launch checklist",
+      "assignee": "Speaker 1",
+      "deadline": "Friday",
+      "status": "pending",
+      "source_excerpt": "I will send the checklist by Friday.",
+      "transcript_index": 3,
+      "is_actionable": true,
+      "confidence": 0.93,
+      "owner_explicit": true,
+      "deadline_explicit": true
+    }
+  ]
+}
+```
+
+#### `PATCH /api/meetings/{meeting_id}/action-items/{action_item_index}`
+
+```json
+{
+  "status": "completed"
 }
 ```
 

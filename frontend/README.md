@@ -3,6 +3,13 @@
 
 This is the React 18, Tailwind CSS, and Radix UI powered frontend interface for the Smart Meeting Assistant. Everything is bundled via Vite. The same frontend can also run inside the Windows-first Electron desktop shell in `electron/main.cjs`.
 
+## Current UI capabilities
+
+- Live and Upload meeting modes share the same transcript, summary, action items, and analysis workspace.
+- Meeting history supports opening saved live/upload records, deleting records, and renaming meeting titles.
+- The Summary panel supports structured edits for overview, key topics, decisions, risks, and action item details.
+- The Action Items panel supports persistent pending/completed status updates for current and historical meetings.
+
 ## Running the code
 
 Make sure you have Node 18+ installed.
