@@ -317,6 +317,14 @@ npm run electron:pack
 docker-compose up --build
 ```
 
+Docker 访问地址：
+
+- 前端：`http://localhost:5173`
+- 后端：`http://localhost:8080`
+
+前端容器会通过 `npm run preview` 提供已构建的 Vite 应用，并和本地开发保持相同的浏览器访问端口。
+后端会议历史会保存在 `backend-data` Docker volume 中。
+
 ## API
 
 ### HTTP
