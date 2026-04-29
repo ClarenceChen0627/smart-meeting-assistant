@@ -1,0 +1,9 @@
+node_modules
+dist
+release
+.env.local
+.env.*.local
+npm-debug.log*
+vite-dev.*.log
+Dockerfile
+.dockerignore

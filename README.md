@@ -318,6 +318,15 @@ The portable executable is generated under `frontend/release/`. The FastAPI back
 docker-compose up --build
 ```
 
+Docker URLs:
+
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8080`
+
+The frontend container serves a built Vite app with `npm run preview`; it uses
+the same browser-facing port as local development for consistency.
+The backend stores meeting history in the `backend-data` Docker volume.
+
 ## API
 
 ### HTTP
