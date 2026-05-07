@@ -16,8 +16,8 @@ const providers: Array<{ code: ASRProvider; name: string; description: string; b
   },
   {
     code: 'dashscope',
-    name: 'DashScope + pyannote',
-    description: 'Realtime ASR with finalize-time diarization fallback',
+    name: 'DashScope Hybrid',
+    description: 'Paraformer realtime ASR with live diart speakers and pyannote final check',
     badge: 'Fallback',
   },
 ];

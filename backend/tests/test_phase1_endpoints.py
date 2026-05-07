@@ -173,6 +173,37 @@ class StubDiarizationService(DiarizationService):
         return self._result
 
 
+class StubRealtimeDiarizationSession:
+    def __init__(self, turn_batches: list[list[DiarizationTurn]]) -> None:
+        self._turn_batches = turn_batches
+        self._batch_index = 0
+        self.closed = False
+
+    async def process_audio(self, audio_chunk: bytes) -> list[DiarizationTurn]:
+        if self._batch_index >= len(self._turn_batches):
+            return []
+        turns = self._turn_batches[self._batch_index]
+        self._batch_index += 1
+        return turns
+
+    async def finish(self) -> list[DiarizationTurn]:
+        return []
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class StubRealtimeDiarizationService:
+    def __init__(self, turn_batches: list[list[DiarizationTurn]] | None = None) -> None:
+        self._turn_batches = turn_batches or []
+        self.created_sessions: list[StubRealtimeDiarizationSession] = []
+
+    def create_session(self, session_id: str) -> StubRealtimeDiarizationSession:
+        session = StubRealtimeDiarizationSession(self._turn_batches)
+        self.created_sessions.append(session)
+        return session
+
+
 def build_turns() -> list[DiarizationTurn]:
     return [
         DiarizationTurn(start=0.0, end=1.2, speaker_label="SPEAKER_00"),
@@ -214,6 +245,7 @@ def build_session_manager(
     summary_service=None,
     sentiment_analysis_service=None,
     translation_service=None,
+    realtime_diarization_service=None,
 ) -> tuple[Settings, SessionManager]:
     settings = build_settings(
         tmp_path,
@@ -230,6 +262,7 @@ def build_session_manager(
         audio_codec_service=StubAudioCodecService(),
         speaker_service=speaker_service,
         diarization_service=diarization_service,
+        realtime_diarization_service=realtime_diarization_service or StubRealtimeDiarizationService(),
         summary_service=summary_service or StubSummaryService(),
         sentiment_analysis_service=sentiment_analysis_service or StubSentimentAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
@@ -412,6 +445,86 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
     assert detail_payload["transcript_count"] == 2
     assert detail_payload["summary"]["overview"].startswith("The team reviewed")
     assert [item["speaker"] for item in detail_payload["transcripts"]] == ["Speaker 1", "Speaker 2"]
+
+
+def test_websocket_hybrid_emits_realtime_speaker_updates_before_final_pyannote(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    realtime_diarization_service = StubRealtimeDiarizationService(
+        [
+            [DiarizationTurn(start=0.0, end=1.0, speaker_label="REALTIME_A")],
+            [DiarizationTurn(start=1.2, end=2.4, speaker_label="REALTIME_B")],
+        ]
+    )
+    diarization_service = StubDiarizationService(
+        speaker_service,
+        DiarizationResult(succeeded=True, turns=build_turns()),
+    )
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=diarization_service,
+        realtime_diarization_service=realtime_diarization_service,
+        default_asr_provider="dashscope",
+        diarization_mode="hybrid",
+    )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&provider=dashscope") as websocket:
+            session_started = websocket.receive_json()
+            websocket.send_bytes(b"\x00\x00" * 160)
+            websocket.send_bytes(b"\x00\x00" * 160)
+            realtime_messages = receive_until(
+                websocket,
+                lambda messages: sum(
+                    1
+                    for message in messages
+                    if message["type"] == "speaker_update"
+                    and message["data"]["speaker_is_final"] is False
+                )
+                == 2,
+            )
+
+            websocket.send_json({"type": "finalize"})
+            final_messages = receive_until(
+                websocket,
+                lambda messages: sum(
+                    1
+                    for message in messages
+                    if message["type"] == "speaker_update"
+                    and message["data"]["speaker_is_final"] is True
+                )
+                == 2
+                and any(message["type"] == "summary" for message in messages),
+            )
+
+        detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    assert len(realtime_diarization_service.created_sessions) == 1
+    realtime_updates = [
+        message["data"]
+        for message in realtime_messages
+        if message["type"] == "speaker_update"
+        and message["data"]["speaker_is_final"] is False
+    ]
+    assert [item["speaker"] for item in realtime_updates] == ["Speaker 1", "Speaker 2"]
+    final_updates = [
+        message["data"]
+        for message in final_messages
+        if message["type"] == "speaker_update"
+        and message["data"]["speaker_is_final"] is True
+    ]
+    assert [item["speaker"] for item in final_updates] == ["Speaker 1", "Speaker 2"]
+    assert detail_response.status_code == 200
+    assert all(item["speaker_is_final"] is True for item in detail_response.json()["transcripts"])
 
 
 def test_transcribe_batch_uses_native_volcengine_speaker_info_without_diarization() -> None:

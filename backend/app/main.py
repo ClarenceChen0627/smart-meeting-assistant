@@ -21,6 +21,7 @@ from app.services.audio_codec_service import AudioCodecService
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
 from app.services.meeting_history_service import MeetingHistoryService
+from app.services.realtime_diarization_service import RealtimeDiarizationService
 from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
     audio_codec_service = AudioCodecService(settings)
     speaker_service = SpeakerService()
     diarization_service = DiarizationService(settings, speaker_service)
+    realtime_diarization_service = RealtimeDiarizationService(settings)
     asr_provider_service = ASRProviderService(
         settings=settings,
         dashscope_client=dashscope_asr_client,
@@ -66,6 +68,7 @@ async def lifespan(app: FastAPI):
         audio_codec_service=audio_codec_service,
         speaker_service=speaker_service,
         diarization_service=diarization_service,
+        realtime_diarization_service=realtime_diarization_service,
         summary_service=summary_service,
         sentiment_analysis_service=sentiment_analysis_service,
         translation_service=translation_service,
@@ -81,6 +84,7 @@ async def lifespan(app: FastAPI):
     app.state.audio_codec_service = audio_codec_service
     app.state.speaker_service = speaker_service
     app.state.diarization_service = diarization_service
+    app.state.realtime_diarization_service = realtime_diarization_service
     app.state.summary_service = summary_service
     app.state.sentiment_analysis_service = sentiment_analysis_service
     app.state.translation_service = translation_service
@@ -108,7 +112,14 @@ async def lifespan(app: FastAPI):
     if translation_service.is_configured:
         logger.info("Using DashScope translation model: %s", settings.dashscope_translation_model)
     if settings.diarization_enabled:
-        logger.info("Speaker diarization is enabled with model: %s", settings.diarization_model)
+        logger.info("Speaker diarization is enabled in %s mode with model: %s", settings.diarization_mode, settings.diarization_model)
+        if settings.realtime_diarization_enabled:
+            logger.info(
+                "Realtime speaker diarization is enabled with duration=%ss step=%ss latency=%ss.",
+                settings.realtime_diarization_duration_seconds,
+                settings.realtime_diarization_step_seconds,
+                settings.realtime_diarization_latency_seconds,
+            )
     else:
         logger.info("Speaker diarization is disabled.")
 

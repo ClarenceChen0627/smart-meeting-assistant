@@ -21,6 +21,7 @@ class ASRProviderSelection:
     provider_name: str
     client: ASRClient
     should_run_diarization: bool
+    should_run_realtime_diarization: bool
 
 
 class ASRProviderService:
@@ -67,10 +68,17 @@ class ASRProviderService:
 
     def _build_selection(self, provider_name: str) -> ASRProviderSelection:
         client = self._clients[provider_name]
+        is_dashscope = provider_name == ASR_PROVIDER_DASHSCOPE
+        is_paraformer_realtime = self._settings.dashscope_asr_model.strip().lower() == "paraformer-realtime-v1"
         return ASRProviderSelection(
             provider_name=provider_name,
             client=client,
-            should_run_diarization=provider_name == ASR_PROVIDER_DASHSCOPE and self._settings.diarization_enabled,
+            should_run_diarization=is_dashscope and self._settings.diarization_enabled,
+            should_run_realtime_diarization=(
+                is_dashscope
+                and is_paraformer_realtime
+                and self._settings.realtime_diarization_enabled
+            ),
         )
 
     def _candidate_order(self, preferred: str) -> list[str]:

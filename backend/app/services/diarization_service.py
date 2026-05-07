@@ -37,7 +37,7 @@ class DiarizationService:
 
     @property
     def is_enabled(self) -> bool:
-        return self._settings.diarization_mode == "offline"
+        return self._settings.diarization_enabled
 
     async def diarize_audio_file(self, audio_path: Path) -> DiarizationResult:
         if not self.is_enabled:

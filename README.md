@@ -20,8 +20,8 @@ Smart Meeting Assistant is a meeting copilot built with React 18 and FastAPI. It
 - Switchable live ASR providers:
   - Volcengine Doubao ASR (default)
   - DashScope Paraformer (`paraformer-realtime-v1`)
-- Realtime transcript rendering with provisional `Unknown` speaker labels
-- Offline speaker diarization on `finalize`, with speaker updates streamed back to the frontend
+- Realtime transcript rendering with speaker labels from the active provider or diarization mode
+- DashScope speaker diarization can run in `offline` mode after `finalize`, or in `hybrid` mode with provisional live diart updates followed by final pyannote confirmation
 - Real-time transcript translation to a target language, currently supporting 10 languages including:
   - English, Spanish, French, German, Chinese
   - Japanese, Korean, Portuguese, Arabic, Hindi
@@ -137,7 +137,7 @@ smart-meeting-assistant/
 6. The backend translates transcript text and emits `translation` messages.
 7. The backend periodically analyzes emotional dynamics, emits `analysis`, and stores the latest analysis snapshot.
 8. When recording stops, the frontend sends `finalize`.
-9. The backend closes the session WAV, runs offline speaker diarization, emits `speaker_update` messages, sends the final `analysis`, sends the final `summary`, marks the meeting as `finalized`, then closes the socket.
+9. The backend closes the session WAV, runs final pyannote speaker confirmation when diarization is enabled, emits final `speaker_update` messages, sends the final `analysis`, sends the final `summary`, marks the meeting as `finalized`, then closes the socket. In `hybrid` mode, provisional diart speaker updates may also be emitted during live capture.
 
 ## Upload Workflow
 
@@ -156,7 +156,7 @@ smart-meeting-assistant/
 - Python 3.10+
 - ffmpeg
 - A valid DashScope API key
-- Optional: a Hugging Face access token for offline speaker diarization
+- Optional: a Hugging Face access token for offline or hybrid speaker diarization
 
 ## Environment Variables
 
@@ -187,8 +187,19 @@ VOLCENGINE_ASR_WS_URL=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
 VOLCENGINE_ASR_NOSTREAM_WS_URL=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream
 VOLCENGINE_ASR_SSD_VERSION=200
 DIARIZATION_MODE=disabled
-DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
 HUGGINGFACE_TOKEN=
+HF_HOME=models/huggingface
+PYANNOTE_CACHE=models/huggingface/hub
+HF_HUB_DISABLE_SYMLINKS=1
+HF_HUB_OFFLINE=0
+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
+REALTIME_DIARIZATION_DURATION_SECONDS=5
+REALTIME_DIARIZATION_STEP_SECONDS=0.5
+REALTIME_DIARIZATION_LATENCY_SECONDS=1
+DIART_SEGMENTATION_MODEL=pyannote/segmentation
+DIART_EMBEDDING_MODEL=pyannote/embedding
+DIART_PYTHON_PATH=
 
 PORT=8080
 LOG_LEVEL=INFO
@@ -211,13 +222,50 @@ MEETING_HISTORY_DB_PATH=data/meeting_history.sqlite3
 - `VOLCENGINE_ASR_WS_URL`: Volcengine streaming ASR websocket endpoint
 - `VOLCENGINE_ASR_NOSTREAM_WS_URL`: Volcengine nostream websocket endpoint used for upload transcription
 - `VOLCENGINE_ASR_SSD_VERSION`: Volcengine SSD version required for native speaker clustering
-- `DIARIZATION_MODE`: set to `offline` to enable finalize-time speaker diarization
-- `DIARIZATION_MODEL`: offline diarization model name
-- `HUGGINGFACE_TOKEN`: Hugging Face token used to download the diarization model
+- `DIARIZATION_MODE`: `disabled`, `offline`, or `hybrid`; `hybrid` only applies to DashScope `paraformer-realtime-v1`
+- `DIARIZATION_MODEL`: final offline pyannote model, executed in the main backend venv
+- `HUGGINGFACE_TOKEN`: Hugging Face token used to download pyannote and diart models
+- `HF_HOME`: project-local Hugging Face cache directory; relative paths are resolved from the project root
+- `PYANNOTE_CACHE`: pyannote.audio 3.x cache directory; set to the same Hugging Face hub cache used by diart
+- `HF_HUB_DISABLE_SYMLINKS`: set to `1` on Windows to avoid Hugging Face cache symlink permission errors
+- `HF_HUB_OFFLINE`: set to `1` after models are downloaded; keep `0` or remove it when changing models or downloading for the first time
+- `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD`: set to `1` so trusted pyannote.audio 3.x checkpoints load on PyTorch 2.6+
+- `REALTIME_DIARIZATION_DURATION_SECONDS`: diart realtime processing window length for `hybrid`
+- `REALTIME_DIARIZATION_STEP_SECONDS`: diart realtime window step for `hybrid`
+- `REALTIME_DIARIZATION_LATENCY_SECONDS`: diart realtime latency target for `hybrid`
+- `DIART_SEGMENTATION_MODEL`: diart segmentation model, for example `pyannote/segmentation`
+- `DIART_EMBEDDING_MODEL`: diart embedding model, for example `pyannote/embedding`
+- `DIART_PYTHON_PATH`: optional Python executable for a separate diart worker venv
 - `FFMPEG_BINARY`: ffmpeg binary path for upload transcription endpoints
 - `MEETING_HISTORY_DB_PATH`: SQLite file path for persisted meeting history
 
+Speaker diarization behavior:
+
+- Volcengine/Doubao uses native speaker clustering returned by the provider.
+- DashScope `paraformer-realtime-v1` with `DIARIZATION_MODE=offline` assigns speakers after the meeting ends by running `DIARIZATION_MODEL`.
+- DashScope `paraformer-realtime-v1` with `DIARIZATION_MODE=hybrid` emits live speaker updates through diart during the meeting, then confirms final speakers with pyannote after the meeting ends.
+
 If diarization is disabled or unavailable, the backend still starts and serves requests. Speaker labels remain `Unknown` instead of failing the session.
+
+By default, Hugging Face downloads are configured to use `models/huggingface` inside this project. The `models/` directory is local runtime data and is ignored by Git. On Windows, `HF_HUB_DISABLE_SYMLINKS=1` avoids `WinError 1314` when the terminal is not running with symlink privileges. `PYANNOTE_CACHE=models/huggingface/hub` lets pyannote.audio 3.x reuse the same project-local cache, and `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` keeps trusted pyannote checkpoints compatible with PyTorch 2.6+.
+
+After all required models are pre-downloaded, set `HF_HUB_OFFLINE=1` locally to avoid Hugging Face HEAD retry logs and use the project cache directly. When changing models or downloading them for the first time, set it back to `0` or remove it.
+
+### Optional diart worker environment
+
+`diart==0.9.2` requires `numpy<2`, while the main backend pyannote stack uses `pyannote.audio` 4.x and `numpy>=2`. Keep realtime diart in a separate environment and point `DIART_PYTHON_PATH` at it:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m venv .venv-diart
+.\.venv-diart\Scripts\python.exe -m pip install -i https://pypi.org/simple -r requirements-diart.txt
+```
+
+Example:
+
+```env
+DIART_PYTHON_PATH=D:\Project\smart-meeting-assistant\backend\.venv-diart\Scripts\python.exe
+```
 
 ### Optional advanced variables
 
@@ -243,22 +291,20 @@ VITE_WS_BASE_URL=ws://localhost:8080
 
 ### Start backend
 
+Backend commands must use the existing virtual environment at `backend\.venv`. Do not use system Python, global pip, global pytest, or global uvicorn for backend work.
+
 ```bash
 cd backend
-python -m venv .venv
-source .venv/Scripts/activate
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+./.venv/Scripts/python.exe -m pip install -r requirements.txt
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 Windows PowerShell:
 
 ```powershell
 cd backend
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 Backend URL:
@@ -285,8 +331,7 @@ Start the backend before using the desktop client:
 
 ```powershell
 cd backend
-.venv\Scripts\Activate.ps1
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 To point the desktop client at a backend, configure `frontend/.env.local`:
@@ -692,7 +737,7 @@ Supported websocket event types:
 
 ## Current Limitations
 
-- Speaker diarization is currently offline-only and runs after `finalize`, not during live capture
+- Hybrid realtime speaker diarization labels are provisional and can jump or split one speaker into multiple temporary labels; final pyannote labels after `finalize` remain authoritative
 - Volcengine native speaker clustering currently applies only to the ASR provider path; translation / summary / analysis still run on DashScope
 - Summary is now generated only after `finalize`; it is no longer refreshed during the meeting
 - Realtime ASR can still misrecognize technical terms and English words
