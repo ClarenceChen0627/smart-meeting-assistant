@@ -151,7 +151,21 @@ The frontend currently has a lightweight Node-based test for upload status messa
 
 The Windows-first CI workflow installs backend and frontend dependencies, runs backend pytest, runs frontend tests, and builds the Vite frontend.
 
-## 11. Current Boundaries
+## 11. Demo Screenshot Refresh
+
+Demo UI screenshots live in `docs/assets/screenshots/` and are linked from both README files. Refresh them only from demo mode so the images do not require external provider keys.
+
+Recommended flow:
+
+1. Start the backend with `DEMO_MODE=1`, `DEFAULT_ASR_PROVIDER=demo`, `DIARIZATION_MODE=disabled`, and a temporary local `MEETING_HISTORY_DB_PATH`.
+2. Build the frontend with `cd frontend` and `npm.cmd run build` on Windows PowerShell.
+3. Use the existing Electron dependency to load `frontend/dist/index.html` and capture the live demo workspace, upload completion state, and saved meeting detail.
+4. Wait for UI state changes to render before capture. In automation, wait for the expected text and then wait at least two `requestAnimationFrame` ticks before calling Electron `capturePage()`.
+5. Commit only the final PNG files under `docs/assets/screenshots/`. Do not commit temporary capture scripts, local SQLite files, large recordings, or dependency upgrades for screenshot capture.
+
+If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgraded for screenshot refreshes; use the dependency already present in `frontend/node_modules`.
+
+## 12. Current Boundaries
 
 - Summary generation happens after finalize or upload completion, not continuously during a live meeting.
 - Translation supports one target language per meeting.

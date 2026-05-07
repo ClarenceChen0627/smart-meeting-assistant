@@ -1,5 +1,6 @@
 import { Cpu, ChevronDown } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
+import { asrProviderOptions } from '../asrProviders';
 import type { ASRProvider } from '../../types';
 
 interface ASRProviderControlsProps {
@@ -7,26 +8,7 @@ interface ASRProviderControlsProps {
   onProviderChange: (provider: ASRProvider) => void;
 }
 
-const providers: Array<{ code: ASRProvider; name: string; description: string; badge: string }> = [
-  {
-    code: 'volcengine',
-    name: 'Volcengine Doubao',
-    description: 'Default live ASR with native speaker clustering',
-    badge: 'Recommended',
-  },
-  {
-    code: 'dashscope',
-    name: 'DashScope Hybrid',
-    description: 'Paraformer realtime ASR with live diart speakers and pyannote final check',
-    badge: 'Fallback',
-  },
-  {
-    code: 'demo',
-    name: 'Demo Mode',
-    description: 'Deterministic local workflow when the backend has DEMO_MODE=1',
-    badge: 'Local',
-  },
-];
+const providers = asrProviderOptions as Array<{ code: ASRProvider; name: string; description: string; badge: string }>;
 
 export function ASRProviderControls({ currentProvider, onProviderChange }: ASRProviderControlsProps) {
   const [isOpen, setIsOpen] = useState(false);

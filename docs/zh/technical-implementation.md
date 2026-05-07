@@ -1169,6 +1169,20 @@ sequenceDiagram
 - 前端用卡片、折线图、饼图、柱状图和 moments 列表展示。
 - Transcript 面板直接标注对应发言的 signal 和 reason。
 
-## 17. 一句话总结
+## 17. Demo 截图更新流程
+
+Demo UI 截图放在 `docs/assets/screenshots/`，并由中英文 README 链接。刷新截图时只使用 demo mode，避免依赖外部 provider key。
+
+推荐流程：
+
+1. 启动后端时设置 `DEMO_MODE=1`、`DEFAULT_ASR_PROVIDER=demo`、`DIARIZATION_MODE=disabled`，并使用临时本地 `MEETING_HISTORY_DB_PATH`。
+2. Windows PowerShell 下构建前端使用 `cd frontend` 后执行 `npm.cmd run build`。
+3. 使用项目已有 Electron 依赖加载 `frontend/dist/index.html`，分别截取实时 demo 工作区、上传完成态、历史会议详情。
+4. 自动化截图时，先等待目标文案出现，再至少等待两个 `requestAnimationFrame` tick 后调用 Electron `capturePage()`，避免截到旧 UI 状态。
+5. 只提交 `docs/assets/screenshots/` 下的最终 PNG。不要提交临时截图脚本、本地 SQLite 文件、大体积录屏或为了截图而更新依赖。
+
+如果 PowerShell 拦截 `npm.ps1`，使用 `npm.cmd`。刷新截图不需要升级 Electron，使用 `frontend/node_modules` 中已有依赖即可。
+
+## 18. 一句话总结
 
 当前项目不是只做了静态 demo，而是已经形成了一条完整的会议处理流水线：前端采集或上传音频，后端完成 ASR、说话人区分、翻译、情绪/参与度分析、总结和行动项提取，所有结构化结果写入 SQLite，并在 React/Electron 前端中支持查看、编辑、重命名、删除和状态维护。

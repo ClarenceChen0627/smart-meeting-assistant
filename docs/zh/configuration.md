@@ -45,6 +45,18 @@ Demo mode 提供确定性的本地 ASR、翻译、总结和分析结果，用于
 
 当 `DEMO_MODE=1` 时，WebSocket 和上传流程都可以使用 `provider=demo`。当 `DEMO_MODE=0` 时，显式请求 `provider=demo` 会停留在 demo provider 并报告未配置，而不是静默伪装成真实 provider。
 
+只需要快速验证本地 demo 链路时，可以运行 demo smoke suite：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest -m smoke
+```
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m pytest -m smoke
+```
+
 ## Backend Variables
 
 - `PORT`: FastAPI 端口，默认 `8080`。

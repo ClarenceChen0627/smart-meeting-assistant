@@ -38,6 +38,12 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
           .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 
+      - name: Run backend demo smoke tests
+        shell: pwsh
+        run: |
+          cd backend
+          .\.venv\Scripts\python.exe -m pytest -m smoke
+
       - name: Run backend tests
         shell: pwsh
         run: |

@@ -163,6 +163,12 @@ docker-compose up --build
 - [Technical Implementation](docs/technical-implementation.md)：英文技术实现说明。
 - [中文技术实现](docs/zh/technical-implementation.md)：中文技术实现说明。
 
+## 演示截图
+
+- [实时 demo 工作区](docs/assets/screenshots/demo-live.png)
+- [上传会议完成态](docs/assets/screenshots/demo-upload-ready.png)
+- [历史会议详情](docs/assets/screenshots/demo-history-detail.png)
+
 ## 当前限制
 
 - Hybrid 实时 diarization 的 speaker label 是临时结果，finalize 后的 pyannote 结果才是最终准结果。
@@ -176,7 +182,7 @@ docker-compose up --build
 
 ## Roadmap
 
-- 短期：稳定 demo 模式，扩大 smoke tests，给可见 UI 变化补截图或录屏。
+- 短期：demo smoke tests 已单独接入 CI，README 已补充 demo UI 截图入口。
 - 中期：增加前端交互测试、会议纪要导出、上传失败重试和错误恢复。
 - 长期：引入后台 worker、可选原始音频留存、参与者级分析和自定义术语表。
 

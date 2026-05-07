@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import { asrProviderOptions } from '../src/app/asrProviders.js';
 import { buildUploadStatusMessage, processingStageLabels } from '../src/app/uploadStatus.js';
 
 const test = (name, fn) => {
@@ -39,4 +40,15 @@ test('buildUploadStatusMessage reports terminal upload states', () => {
     buildUploadStatusMessage({ status: 'finalized' }, false),
     'Upload meeting is ready to review.'
   );
+});
+
+test('ASR provider controls expose demo mode as a local workflow', () => {
+  const providerCodes = asrProviderOptions.map((provider) => provider.code);
+  assert.deepEqual(providerCodes, ['volcengine', 'dashscope', 'demo']);
+
+  const demoProvider = asrProviderOptions.find((provider) => provider.code === 'demo');
+  assert.ok(demoProvider);
+  assert.equal(demoProvider.name, 'Demo Mode');
+  assert.equal(demoProvider.badge, 'Local');
+  assert.match(demoProvider.description, /DEMO_MODE=1/);
 });

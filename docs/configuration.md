@@ -45,6 +45,18 @@ Demo mode provides deterministic local ASR, translation, summary, and analysis. 
 
 When `DEMO_MODE=1`, `provider=demo` is available on both WebSocket and upload workflows. If real ASR credentials are missing and the frontend still requests `volcengine` or `dashscope`, the backend can fall back to the configured demo provider. When `DEMO_MODE=0`, an explicit `provider=demo` request stays on the demo provider and reports that it is not configured instead of silently using a real provider.
 
+Run the fast demo smoke suite when you only need to verify the local demo path:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest -m smoke
+```
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m pytest -m smoke
+```
+
 ## Backend Variables
 
 - `PORT`: FastAPI port, default `8080`.
