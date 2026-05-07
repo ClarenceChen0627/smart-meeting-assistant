@@ -163,6 +163,12 @@ docker-compose up --build
 - [Technical Implementation](docs/technical-implementation.md): English implementation notes.
 - [中文技术实现](docs/zh/technical-implementation.md): Chinese implementation notes.
 
+## Demo Screenshots
+
+- [Live demo workspace](docs/assets/screenshots/demo-live.png)
+- [Upload meeting ready](docs/assets/screenshots/demo-upload-ready.png)
+- [Saved meeting detail](docs/assets/screenshots/demo-history-detail.png)
+
 ## Current Limitations
 
 - Hybrid realtime diarization labels are provisional until final pyannote confirmation.
@@ -176,7 +182,7 @@ docker-compose up --build
 
 ## Roadmap
 
-- Short term: keep demo mode stable, broaden smoke tests, and add screenshots or clips for visible UI changes.
+- Short term: demo smoke tests are split out for CI, and README now links to demo UI screenshots.
 - Medium term: add frontend interaction tests, export meeting notes, and improve upload retry/error recovery.
 - Long term: introduce background workers, optional raw audio retention, participant-level analysis, and custom terminology support.
 
