@@ -1,0 +1,87 @@
+# Configuration
+
+Language:
+- English: `configuration.md`
+- 简体中文: [zh/configuration.md](zh/configuration.md)
+
+Copy the root backend environment file before local development:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Frontend-only URL overrides belong in `frontend/.env.local`, copied from `frontend/.env.example`.
+
+## Minimal Configuration Matrix
+
+| Workflow | Required backend variables | Notes |
+| --- | --- | --- |
+| Demo mode | `DEMO_MODE=1` | No external AI keys required. Use for local smoke tests and CI only. |
+| Browser frontend | `VITE_API_BASE_URL`, `VITE_WS_BASE_URL` only when backend is not `localhost:8080` | Store these in `frontend/.env.local`. |
+| Local backend | `PORT`, `LOG_LEVEL`, `MEETING_HISTORY_DB_PATH` | Defaults are enough for a backend boot. |
+| Realtime Volcengine ASR | `DEFAULT_ASR_PROVIDER=volcengine`, `VOLCENGINE_ASR_APP_KEY`, `VOLCENGINE_ASR_ACCESS_KEY`, `VOLCENGINE_ASR_RESOURCE_ID` | Volcengine can return native speaker clustering. |
+| Realtime DashScope ASR | `DEFAULT_ASR_PROVIDER=dashscope`, `DASHSCOPE_API_KEY`, `DASHSCOPE_ASR_MODEL` | Required for DashScope Paraformer realtime ASR. |
+| Translation, summary, analysis | `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_TRANSLATION_MODEL` | Used by translation, summary, and meeting analysis. |
+| Upload meetings | A configured ASR provider plus `FFMPEG_BINARY` | `DEMO_MODE=1` skips external ASR and ffmpeg conversion for demo uploads. |
+| Offline diarization | DashScope ASR plus `DIARIZATION_MODE=offline`, `HUGGINGFACE_TOKEN`, `DIARIZATION_MODEL` | Runs after `finalize` or upload transcription. |
+| Hybrid diarization | DashScope ASR plus `DIARIZATION_MODE=hybrid`, `DIART_PYTHON_PATH` | Live diart updates are provisional; final pyannote output is authoritative. |
+| Electron client | Running backend plus `frontend/.env.local` if backend URL is custom | Electron wraps the Vite frontend and does not start FastAPI. |
+
+## Demo Mode
+
+Set:
+
+```env
+DEMO_MODE=1
+DEFAULT_ASR_PROVIDER=demo
+DIARIZATION_MODE=disabled
+```
+
+Demo mode provides deterministic local ASR, translation, summary, and analysis. It is intended for onboarding, development, documentation smoke tests, and CI. It does not represent real model quality.
+
+When `DEMO_MODE=1`, `provider=demo` is available on both WebSocket and upload workflows. If real ASR credentials are missing and the frontend still requests `volcengine` or `dashscope`, the backend can fall back to the configured demo provider. When `DEMO_MODE=0`, an explicit `provider=demo` request stays on the demo provider and reports that it is not configured instead of silently using a real provider.
+
+## Backend Variables
+
+- `PORT`: FastAPI port, default `8080`.
+- `LOG_LEVEL`: backend logging level, default `INFO`.
+- `DEMO_MODE`: enables deterministic local demo providers when set to `1`, `true`, `yes`, or `on`.
+- `FFMPEG_BINARY`: ffmpeg executable used for non-demo uploads.
+- `AUDIO_SAMPLE_RATE`: PCM sample rate, default `16000`.
+- `AUDIO_CHANNELS`: audio channels, default `1`.
+- `MEETING_HISTORY_DB_PATH`: SQLite meeting history path.
+- `DEFAULT_ASR_PROVIDER`: `volcengine`, `dashscope`, or `demo`.
+- `DASHSCOPE_API_KEY`: DashScope key for ASR, translation, summary, and analysis.
+- `DASHSCOPE_MODEL`: chat model for summary and analysis.
+- `DASHSCOPE_TRANSLATION_MODEL`: translation model.
+- `DASHSCOPE_ASR_MODEL`: realtime ASR model, usually `paraformer-realtime-v1`.
+- `DASHSCOPE_ASR_WS_URL`: DashScope ASR websocket endpoint.
+- `DASHSCOPE_WORKSPACE_ID`: optional DashScope workspace.
+- `VOLCENGINE_ASR_APP_KEY`: Volcengine speech app key.
+- `VOLCENGINE_ASR_ACCESS_KEY`: Volcengine speech access key.
+- `VOLCENGINE_ASR_RESOURCE_ID`: Volcengine speech resource ID.
+- `VOLCENGINE_ASR_WS_URL`: Volcengine streaming endpoint.
+- `VOLCENGINE_ASR_NOSTREAM_WS_URL`: Volcengine upload transcription endpoint.
+- `VOLCENGINE_ASR_SSD_VERSION`: Volcengine speaker clustering SSD version.
+
+## Frontend Variables
+
+Store these in `frontend/.env.local`:
+
+```env
+VITE_API_BASE_URL=http://localhost:8080
+VITE_WS_BASE_URL=ws://localhost:8080
+```
+
+Do not put backend secrets in frontend environment files.
+
+## Windows Backend Commands
+
+Backend Python commands must use the repository virtual environment:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```

@@ -10,6 +10,7 @@ import { SummaryPanel } from './components/SummaryPanel';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import { TranslationControls } from './components/TranslationControls';
 import { UploadMeetingControls } from './components/UploadMeetingControls';
+import { buildUploadStatusMessage, processingStageLabels } from './uploadStatus';
 import { useAudioRecording } from '../hooks/useAudioRecording';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type {
@@ -18,7 +19,6 @@ import type {
   MeetingAnalysis,
   MeetingHistoryListItem,
   MeetingHistoryTranscriptItem,
-  MeetingProcessingStage,
   MeetingRecord,
   MeetingSourceType,
   MeetingSummary,
@@ -55,13 +55,6 @@ const buildApiBaseUrl = () => {
 const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider) => {
   const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || 'ws://localhost:8080';
   return `${baseUrl.replace(/\/+$/, '')}/ws/meeting?scene=${scene}&target_lang=${targetLang}&provider=${provider}`;
-};
-
-const processingStageLabels: Record<MeetingProcessingStage, string> = {
-  transcribing: 'Transcribing uploaded audio',
-  translating: 'Generating transcript translations',
-  analyzing: 'Analyzing meeting dynamics',
-  summarizing: 'Generating meeting summary',
 };
 
 const sourceLabels: Record<MeetingSourceType, string> = {
@@ -145,31 +138,6 @@ const formatHistoryTimestamp = (value: string) =>
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
-
-const buildUploadStatusMessage = (
-  meeting: MeetingRecord | null,
-  isUploadingFile: boolean
-) => {
-  if (isUploadingFile) {
-    return 'Uploading audio file...';
-  }
-
-  if (!meeting) {
-    return 'Select a meeting audio file to generate transcript, summary, action items, and analysis.';
-  }
-
-  if (meeting.status === 'processing') {
-    return meeting.processing_stage
-      ? processingStageLabels[meeting.processing_stage]
-      : 'Processing uploaded meeting...';
-  }
-
-  if (meeting.status === 'failed') {
-    return meeting.error_message || 'Upload processing failed.';
-  }
-
-  return 'Upload meeting is ready to review.';
-};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'analysis'>('transcript');

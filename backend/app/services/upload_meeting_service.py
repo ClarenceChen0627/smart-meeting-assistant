@@ -13,7 +13,7 @@ from app.schemas.meeting_history import (
 )
 from app.schemas.transcript import TranscriptItem
 from app.schemas.translation import TranscriptTranslation
-from app.services.asr_provider_service import ASRProviderService
+from app.services.asr_provider_service import ASR_PROVIDER_DEMO, ASRProviderService
 from app.services.audio_codec_service import AudioCodecService
 from app.services.diarization_service import DiarizationService
 from app.services.meeting_history_service import MeetingHistoryService
@@ -115,11 +115,14 @@ class UploadMeetingService:
         initial_provider: str,
     ) -> None:
         try:
-            wav_audio = await self._audio_codec_service.convert_upload_to_wav(
-                audio_data,
-                filename=filename,
-                content_type=content_type,
-            )
+            if initial_provider == ASR_PROVIDER_DEMO:
+                wav_audio = audio_data
+            else:
+                wav_audio = await self._audio_codec_service.convert_upload_to_wav(
+                    audio_data,
+                    filename=filename,
+                    content_type=content_type,
+                )
             transcripts, resolved_provider = await self._transcribe_audio(
                 wav_audio,
                 preferred_provider=initial_provider,

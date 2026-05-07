@@ -10,9 +10,11 @@ logger = logging.getLogger(__name__)
 
 ASR_PROVIDER_DASHSCOPE = "dashscope"
 ASR_PROVIDER_VOLCENGINE = "volcengine"
+ASR_PROVIDER_DEMO = "demo"
 SUPPORTED_ASR_PROVIDERS = {
     ASR_PROVIDER_DASHSCOPE,
     ASR_PROVIDER_VOLCENGINE,
+    ASR_PROVIDER_DEMO,
 }
 
 
@@ -31,15 +33,21 @@ class ASRProviderService:
         settings: Settings,
         dashscope_client: ASRClient,
         volcengine_client: ASRClient,
+        demo_client: ASRClient | None = None,
     ) -> None:
         self._settings = settings
         self._clients: dict[str, ASRClient] = {
             ASR_PROVIDER_DASHSCOPE: dashscope_client,
             ASR_PROVIDER_VOLCENGINE: volcengine_client,
         }
+        if demo_client is not None:
+            self._clients[ASR_PROVIDER_DEMO] = demo_client
 
     def resolve_provider(self, preferred_provider: str | None) -> ASRProviderSelection:
         preferred = self.normalize_provider(preferred_provider) or self._settings.default_asr_provider
+        if preferred == ASR_PROVIDER_DEMO and ASR_PROVIDER_DEMO in self._clients:
+            return self._build_selection(ASR_PROVIDER_DEMO)
+
         for provider_name in self._candidate_order(preferred):
             client = self._clients.get(provider_name)
             if client is None:
@@ -66,6 +74,22 @@ class ASRProviderService:
             return normalized
         return None
 
+    def provider_statuses(self) -> list[dict[str, str | bool]]:
+        return [
+            {
+                "provider": provider_name,
+                "configured": client.is_configured,
+            }
+            for provider_name, client in self._clients.items()
+        ]
+
+    def available_provider_names(self) -> list[str]:
+        return [
+            provider_name
+            for provider_name, client in self._clients.items()
+            if client.is_configured
+        ]
+
     def _build_selection(self, provider_name: str) -> ASRProviderSelection:
         client = self._clients[provider_name]
         is_dashscope = provider_name == ASR_PROVIDER_DASHSCOPE
@@ -87,4 +111,6 @@ class ASRProviderService:
             ordered.append(ASR_PROVIDER_DASHSCOPE)
         if ASR_PROVIDER_VOLCENGINE not in ordered:
             ordered.append(ASR_PROVIDER_VOLCENGINE)
+        if self._settings.demo_mode and ASR_PROVIDER_DEMO in self._clients and ASR_PROVIDER_DEMO not in ordered:
+            ordered.append(ASR_PROVIDER_DEMO)
         return ordered

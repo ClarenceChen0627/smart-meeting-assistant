@@ -6,9 +6,12 @@ import time
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.health import router as health_router
 from app.api.meetings import router as meetings_router
 from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
+from app.clients.demo_asr_client import DemoASRClient
+from app.clients.demo_dashscope_client import DemoDashScopeClient
 from app.clients.volcengine_asr_client import VolcengineTranscriptSegment
 from app.services.asr_provider_service import ASRProviderService
 from app.core.config import Settings
@@ -17,8 +20,11 @@ from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
 from app.services.meeting_history_service import MeetingHistoryService
+from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
+from app.services.summary_service import SummaryService
+from app.services.translation_service import TranslationService
 from app.services.upload_meeting_service import UploadMeetingService
 
 
@@ -1233,3 +1239,181 @@ def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_u
         "title_manually_edited",
         "summary_manually_edited",
     }.issubset(migrated_columns)
+
+
+def build_demo_services(tmp_path):
+    settings = build_settings(
+        tmp_path,
+        demo_mode=True,
+        default_asr_provider="demo",
+    )
+    speaker_service = SpeakerService()
+    demo_asr_client = DemoASRClient(settings)
+    demo_llm_client = DemoDashScopeClient(settings)
+    meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    asr_provider_service = ASRProviderService(
+        settings=settings,
+        dashscope_client=StubASRClient("dashscope", [], is_configured=False),
+        volcengine_client=StubASRClient("volcengine", [], is_configured=False),
+        demo_client=demo_asr_client,
+    )
+    translation_service = TranslationService(demo_llm_client)
+    summary_service = SummaryService(demo_llm_client)
+    sentiment_analysis_service = SentimentAnalysisService(demo_llm_client)
+    return (
+        settings,
+        speaker_service,
+        asr_provider_service,
+        translation_service,
+        summary_service,
+        sentiment_analysis_service,
+        meeting_history_service,
+    )
+
+
+def test_health_reports_demo_mode_and_available_provider(tmp_path) -> None:
+    (
+        settings,
+        _speaker_service,
+        asr_provider_service,
+        _translation_service,
+        _summary_service,
+        _sentiment_analysis_service,
+        _meeting_history_service,
+    ) = build_demo_services(tmp_path)
+    app = FastAPI()
+    app.include_router(health_router)
+    app.state.settings = settings
+    app.state.asr_provider_service = asr_provider_service
+
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["demoMode"] is True
+    assert "demo" in payload["providers"]["availableAsrProviders"]
+    assert any(
+        item["provider"] == "demo" and item["configured"] is True
+        for item in payload["providers"]["asrProviderStatuses"]
+    )
+
+
+def test_demo_provider_websocket_generates_meeting_outputs(tmp_path) -> None:
+    (
+        settings,
+        speaker_service,
+        asr_provider_service,
+        translation_service,
+        summary_service,
+        sentiment_analysis_service,
+        meeting_history_service,
+    ) = build_demo_services(tmp_path)
+    app = FastAPI()
+    app.include_router(websocket_router)
+    app.include_router(meetings_router)
+    app.state.session_manager = SessionManager(
+        settings=settings,
+        asr_provider_service=asr_provider_service,
+        audio_codec_service=StubAudioCodecService(),
+        speaker_service=speaker_service,
+        diarization_service=StubDiarizationService(speaker_service, DiarizationResult(succeeded=True, turns=[])),
+        realtime_diarization_service=StubRealtimeDiarizationService(),
+        summary_service=summary_service,
+        sentiment_analysis_service=sentiment_analysis_service,
+        translation_service=translation_service,
+        meeting_history_service=meeting_history_service,
+    )
+    app.state.meeting_history_service = meeting_history_service
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&target_lang=ja&provider=demo") as websocket:
+            session_started = websocket.receive_json()
+            websocket.send_bytes(b"demo-audio-1")
+            websocket.send_bytes(b"demo-audio-2")
+            websocket.send_bytes(b"demo-audio-3")
+            messages = receive_until(
+                websocket,
+                lambda items: (
+                    sum(1 for item in items if item["type"] == "transcript") == 3
+                    and any(item["type"] == "translation" for item in items)
+                ),
+            )
+            websocket.send_json({"type": "finalize"})
+            finalized_messages = receive_until(
+                websocket,
+                lambda items: (
+                    any(item["type"] == "analysis" for item in items)
+                    and any(item["type"] == "summary" for item in items)
+                ),
+            )
+
+        detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    assert session_started["type"] == "session_started"
+    assert session_started["data"]["provider"] == "demo"
+    assert any(message["type"] == "translation" for message in messages)
+    assert any(message["type"] == "analysis" for message in finalized_messages)
+    assert any(message["type"] == "summary" for message in finalized_messages)
+    detail_payload = detail_response.json()
+    assert detail_payload["provider"] == "demo"
+    assert detail_payload["transcript_count"] == 3
+    assert detail_payload["analysis"]["engagement_summary"].startswith("The demo meeting")
+    assert detail_payload["summary"]["title"] == "Demo Launch Checklist Review"
+
+
+def test_demo_upload_finalizes_without_audio_conversion_or_external_keys(tmp_path) -> None:
+    (
+        settings,
+        speaker_service,
+        asr_provider_service,
+        translation_service,
+        summary_service,
+        sentiment_analysis_service,
+        meeting_history_service,
+    ) = build_demo_services(tmp_path)
+    upload_meeting_service = UploadMeetingService(
+        asr_provider_service=asr_provider_service,
+        audio_codec_service=FailingAudioCodecService(),
+        speaker_service=speaker_service,
+        diarization_service=StubDiarizationService(speaker_service, DiarizationResult(succeeded=True, turns=[])),
+        summary_service=summary_service,
+        sentiment_analysis_service=sentiment_analysis_service,
+        translation_service=translation_service,
+        meeting_history_service=meeting_history_service,
+    )
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            data={"scene": "general", "target_lang": "es", "provider": "demo"},
+            files={"file": ("demo.wav", b"demo-audio", "audio/wav")},
+        )
+        assert response.status_code == 202
+        payload = response.json()
+        finalized_payload = wait_for_meeting_status(client, payload["meeting_id"], "finalized")
+
+    assert finalized_payload["provider"] == "demo"
+    assert finalized_payload["transcript_count"] == 3
+    assert finalized_payload["transcripts"][0]["translated_target_lang"] == "es"
+    assert finalized_payload["summary"]["title"] == "Demo Launch Checklist Review"
+    assert finalized_payload["analysis"]["overall_sentiment"] == "mixed"
+
+
+def test_demo_provider_disabled_does_not_silently_fallback_to_real_provider(tmp_path) -> None:
+    settings = build_settings(tmp_path, demo_mode=False, default_asr_provider="volcengine")
+    provider_service = ASRProviderService(
+        settings=settings,
+        dashscope_client=StubASRClient("dashscope", build_segments(), is_configured=True),
+        volcengine_client=StubASRClient("volcengine", build_segments(), is_configured=True),
+        demo_client=DemoASRClient(settings),
+    )
+
+    selection = provider_service.resolve_provider("demo")
+
+    assert selection.provider_name == "demo"
+    assert selection.client.is_configured is False

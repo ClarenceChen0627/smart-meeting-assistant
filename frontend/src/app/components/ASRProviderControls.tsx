@@ -20,6 +20,12 @@ const providers: Array<{ code: ASRProvider; name: string; description: string; b
     description: 'Paraformer realtime ASR with live diart speakers and pyannote final check',
     badge: 'Fallback',
   },
+  {
+    code: 'demo',
+    name: 'Demo Mode',
+    description: 'Deterministic local workflow when the backend has DEMO_MODE=1',
+    badge: 'Local',
+  },
 ];
 
 export function ASRProviderControls({ currentProvider, onProviderChange }: ASRProviderControlsProps) {
