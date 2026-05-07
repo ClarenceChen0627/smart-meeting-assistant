@@ -156,7 +156,7 @@ class AliyunASRClient:
         token_provider: AliyunTokenProvider | None = None,
     ) -> None:
         self._settings = settings
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False)
         self._token_provider = token_provider or self._build_token_provider()
 
     def _build_token_provider(self) -> AliyunTokenProvider:

@@ -20,7 +20,7 @@ from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
 from app.services.meeting_history_service import MeetingHistoryService
-from app.services.sentiment_analysis_service import SentimentAnalysisService
+from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -133,14 +133,14 @@ class StubSummaryService:
         )
 
 
-class StubSentimentAnalysisService:
+class StubMeetingAnalysisService:
     is_configured = True
 
     async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
         return MeetingAnalysis.empty()
 
 
-class IncrementingSentimentAnalysisService:
+class IncrementingMeetingAnalysisService:
     is_configured = True
 
     def __init__(self) -> None:
@@ -161,7 +161,7 @@ class SlowSummaryService(StubSummaryService):
         return await super().generate_summary(transcripts, scene)
 
 
-class SlowSentimentAnalysisService(IncrementingSentimentAnalysisService):
+class SlowMeetingAnalysisService(IncrementingMeetingAnalysisService):
     async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
         await asyncio.sleep(0.05)
         return await super().analyze_meeting(transcripts, scene)
@@ -249,7 +249,7 @@ def build_session_manager(
     default_asr_provider: str,
     diarization_mode: str,
     summary_service=None,
-    sentiment_analysis_service=None,
+    meeting_analysis_service=None,
     translation_service=None,
     realtime_diarization_service=None,
 ) -> tuple[Settings, SessionManager]:
@@ -270,7 +270,7 @@ def build_session_manager(
         diarization_service=diarization_service,
         realtime_diarization_service=realtime_diarization_service or StubRealtimeDiarizationService(),
         summary_service=summary_service or StubSummaryService(),
-        sentiment_analysis_service=sentiment_analysis_service or StubSentimentAnalysisService(),
+        meeting_analysis_service=meeting_analysis_service or StubMeetingAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=MeetingHistoryService(settings.resolved_meeting_history_db_path),
     )
@@ -287,7 +287,7 @@ def build_upload_service(
     diarization_mode: str,
     audio_codec_service=None,
     summary_service=None,
-    sentiment_analysis_service=None,
+    meeting_analysis_service=None,
     translation_service=None,
 ) -> tuple[Settings, MeetingHistoryService, UploadMeetingService]:
     settings = build_settings(
@@ -306,7 +306,7 @@ def build_upload_service(
         speaker_service=speaker_service,
         diarization_service=diarization_service,
         summary_service=summary_service or StubSummaryService(),
-        sentiment_analysis_service=sentiment_analysis_service or StubSentimentAnalysisService(),
+        meeting_analysis_service=meeting_analysis_service or StubMeetingAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=meeting_history_service,
     )
@@ -714,7 +714,7 @@ def test_meeting_history_persists_translation_latest_analysis_and_delete(tmp_pat
         default_asr_provider="dashscope",
         diarization_mode="disabled",
         translation_service=StubConfiguredTranslationService(),
-        sentiment_analysis_service=IncrementingSentimentAnalysisService(),
+        meeting_analysis_service=IncrementingMeetingAnalysisService(),
     )
     app.state.session_manager = session_manager
     app.state.meeting_history_service = session_manager._meeting_history_service
@@ -782,7 +782,7 @@ def test_upload_endpoint_creates_processing_record_and_finalizes_with_results(tm
         default_asr_provider="dashscope",
         diarization_mode="disabled",
         translation_service=StubConfiguredTranslationService(),
-        sentiment_analysis_service=IncrementingSentimentAnalysisService(),
+        meeting_analysis_service=IncrementingMeetingAnalysisService(),
     )
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service
@@ -840,7 +840,7 @@ def test_upload_detail_polling_returns_partial_results_before_summary(tmp_path) 
         default_asr_provider="dashscope",
         diarization_mode="disabled",
         translation_service=StubConfiguredTranslationService(),
-        sentiment_analysis_service=SlowSentimentAnalysisService(),
+        meeting_analysis_service=SlowMeetingAnalysisService(),
         summary_service=SlowSummaryService(),
     )
     app.state.meeting_history_service = meeting_history_service
@@ -1259,14 +1259,14 @@ def build_demo_services(tmp_path):
     )
     translation_service = TranslationService(demo_llm_client)
     summary_service = SummaryService(demo_llm_client)
-    sentiment_analysis_service = SentimentAnalysisService(demo_llm_client)
+    meeting_analysis_service = MeetingAnalysisService(demo_llm_client)
     return (
         settings,
         speaker_service,
         asr_provider_service,
         translation_service,
         summary_service,
-        sentiment_analysis_service,
+        meeting_analysis_service,
         meeting_history_service,
     )
 
@@ -1278,7 +1278,7 @@ def test_health_reports_demo_mode_and_available_provider(tmp_path) -> None:
         asr_provider_service,
         _translation_service,
         _summary_service,
-        _sentiment_analysis_service,
+        _meeting_analysis_service,
         _meeting_history_service,
     ) = build_demo_services(tmp_path)
     app = FastAPI()
@@ -1306,7 +1306,7 @@ def test_demo_provider_websocket_generates_meeting_outputs(tmp_path) -> None:
         asr_provider_service,
         translation_service,
         summary_service,
-        sentiment_analysis_service,
+        meeting_analysis_service,
         meeting_history_service,
     ) = build_demo_services(tmp_path)
     app = FastAPI()
@@ -1320,7 +1320,7 @@ def test_demo_provider_websocket_generates_meeting_outputs(tmp_path) -> None:
         diarization_service=StubDiarizationService(speaker_service, DiarizationResult(succeeded=True, turns=[])),
         realtime_diarization_service=StubRealtimeDiarizationService(),
         summary_service=summary_service,
-        sentiment_analysis_service=sentiment_analysis_service,
+        meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
     )
@@ -1369,7 +1369,7 @@ def test_demo_upload_finalizes_without_audio_conversion_or_external_keys(tmp_pat
         asr_provider_service,
         translation_service,
         summary_service,
-        sentiment_analysis_service,
+        meeting_analysis_service,
         meeting_history_service,
     ) = build_demo_services(tmp_path)
     upload_meeting_service = UploadMeetingService(
@@ -1378,7 +1378,7 @@ def test_demo_upload_finalizes_without_audio_conversion_or_external_keys(tmp_pat
         speaker_service=speaker_service,
         diarization_service=StubDiarizationService(speaker_service, DiarizationResult(succeeded=True, turns=[])),
         summary_service=summary_service,
-        sentiment_analysis_service=sentiment_analysis_service,
+        meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
     )

@@ -19,7 +19,7 @@ from app.schemas.transcript import TranscriptItem
 logger = logging.getLogger(__name__)
 
 
-class SentimentAnalysisService:
+class MeetingAnalysisService:
     _SIGNAL_PATTERNS: dict[MeetingSignalType, tuple[str, ...]] = {
         MeetingSignalType.AGREEMENT: ("我同意", "同意这个方案", "可以推进", "没问题", "支持这个方案"),
         MeetingSignalType.DISAGREEMENT: ("我不同意", "我不认为这样可行", "不合理", "不认可", "我反对"),

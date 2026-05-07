@@ -16,6 +16,10 @@ Demo mode is the fastest way to verify the full product workflow locally. It use
 Copy-Item .env.example .env
 ```
 
+```bash
+cp .env.example .env
+```
+
 Edit `.env`:
 
 ```env
@@ -30,6 +34,12 @@ Start the backend:
 cd backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 Start the frontend:
@@ -93,9 +103,24 @@ cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
+```bash
+cd backend
+./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+./.venv/Scripts/python.exe -m pytest
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
 Frontend:
 
 ```powershell
+cd frontend
+npm install
+npm run test
+npm run build
+npm run dev
+```
+
+```bash
 cd frontend
 npm install
 npm run test
@@ -111,9 +136,19 @@ npm run dev:electron
 npm run electron:pack
 ```
 
+```bash
+cd frontend
+npm run dev:electron
+npm run electron:pack
+```
+
 Docker:
 
 ```powershell
+docker-compose up --build
+```
+
+```bash
 docker-compose up --build
 ```
 

@@ -24,7 +24,7 @@ from app.services.audio_codec_service import AudioCodecService
 from app.services.diarization_service import DiarizationService, DiarizationTurn
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService, RealtimeDiarizationSession
-from app.services.sentiment_analysis_service import SentimentAnalysisService
+from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
@@ -82,7 +82,7 @@ class SessionManager:
         diarization_service: DiarizationService,
         realtime_diarization_service: RealtimeDiarizationService,
         summary_service: SummaryService,
-        sentiment_analysis_service: SentimentAnalysisService,
+        meeting_analysis_service: MeetingAnalysisService,
         translation_service: TranslationService,
         meeting_history_service: MeetingHistoryService,
     ) -> None:
@@ -93,7 +93,7 @@ class SessionManager:
         self._diarization_service = diarization_service
         self._realtime_diarization_service = realtime_diarization_service
         self._summary_service = summary_service
-        self._sentiment_analysis_service = sentiment_analysis_service
+        self._meeting_analysis_service = meeting_analysis_service
         self._translation_service = translation_service
         self._meeting_history_service = meeting_history_service
         self._sessions: dict[str, MeetingSession] = {}
@@ -581,12 +581,12 @@ class SessionManager:
             return
         if not force and session.last_analysis_transcript_count == session.transcript_count:
             return
-        if not self._sentiment_analysis_service.is_configured:
+        if not self._meeting_analysis_service.is_configured:
             return
 
         session.analysis_in_progress = True
         try:
-            analysis = await self._sentiment_analysis_service.analyze_meeting(
+            analysis = await self._meeting_analysis_service.analyze_meeting(
                 session.transcripts,
                 session.scene,
             )

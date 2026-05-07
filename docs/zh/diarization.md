@@ -53,6 +53,12 @@ cd backend
 .\.venv-diart\Scripts\python.exe -m pip install -i https://pypi.org/simple -r requirements-diart.txt
 ```
 
+```bash
+cd backend
+./.venv/Scripts/python.exe -m venv .venv-diart
+./.venv-diart/Scripts/python.exe -m pip install -i https://pypi.org/simple -r requirements-diart.txt
+```
+
 然后把 `DIART_PYTHON_PATH` 指向 `.venv-diart` 的 Python 可执行文件。
 
 ## Windows Cache Notes

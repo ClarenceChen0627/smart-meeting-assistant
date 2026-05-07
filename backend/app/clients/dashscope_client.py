@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class DashScopeClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client = httpx.AsyncClient(timeout=60.0, trust_env=False)
 
     @property
     def is_configured(self) -> bool:

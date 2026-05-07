@@ -51,11 +51,21 @@ cd D:\Project\smart-meeting-assistant\backend
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+```bash
+cd backend
+./.venv/Scripts/python.exe -m pip install -r requirements.txt
+```
+
 启动主后端也必须使用主 venv：
 
 ```powershell
 cd D:\Project\smart-meeting-assistant\backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 ## 2. 创建 diart 独立环境
@@ -69,6 +79,11 @@ cd D:\Project\smart-meeting-assistant\backend
 .\.venv\Scripts\python.exe -m venv .venv-diart
 ```
 
+```bash
+cd backend
+./.venv/Scripts/python.exe -m venv .venv-diart
+```
+
 安装 diart 依赖，使用官方 PyPI 源：
 
 ```powershell
@@ -77,11 +92,22 @@ cd D:\Project\smart-meeting-assistant\backend
 .\.venv-diart\Scripts\python.exe -m pip install -i https://pypi.org/simple -r requirements-diart.txt
 ```
 
+```bash
+cd backend
+./.venv-diart/Scripts/python.exe -m pip install -i https://pypi.org/simple --upgrade pip
+./.venv-diart/Scripts/python.exe -m pip install -i https://pypi.org/simple -r requirements-diart.txt
+```
+
 安装完成后检查依赖：
 
 ```powershell
 cd D:\Project\smart-meeting-assistant\backend
 .\.venv-diart\Scripts\python.exe -m pip check
+```
+
+```bash
+cd backend
+./.venv-diart/Scripts/python.exe -m pip check
 ```
 
 正常结果应该是：
@@ -116,11 +142,21 @@ cd D:\Project\smart-meeting-assistant\backend
 .\.venv-diart\Scripts\python.exe -m pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0
 ```
 
+```bash
+cd backend
+./.venv-diart/Scripts/python.exe -m pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0
+```
+
 检查 GPU 是否可用：
 
 ```powershell
 cd D:\Project\smart-meeting-assistant\backend
 .\.venv-diart\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"
+```
+
+```bash
+cd backend
+./.venv-diart/Scripts/python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"
 ```
 
 如果输出 `True` 和显卡名称，diart worker 会自动使用 GPU。
@@ -247,6 +283,11 @@ cd D:\Project\smart-meeting-assistant\backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
+```bash
+cd backend
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
 当用户选择 DashScope `paraformer-realtime-v1` 并开始会议后，主后端会自动启动：
 
 ```text
@@ -275,6 +316,11 @@ cd D:\Project\smart-meeting-assistant\backend
 .\.venv\Scripts\python.exe -c "import numpy, importlib.metadata as m; print('main numpy', numpy.__version__); print('main pyannote.audio', m.version('pyannote.audio'))"
 ```
 
+```bash
+cd backend
+./.venv/Scripts/python.exe -c "import numpy, importlib.metadata as m; print('main numpy', numpy.__version__); print('main pyannote.audio', m.version('pyannote.audio'))"
+```
+
 期望主后端保留 `pyannote.audio` 4.x 和 `numpy>=2`。
 
 检查 diart venv：
@@ -282,6 +328,11 @@ cd D:\Project\smart-meeting-assistant\backend
 ```powershell
 cd D:\Project\smart-meeting-assistant\backend
 .\.venv-diart\Scripts\python.exe -c "import numpy, torch, importlib.metadata as m; print('diart', m.version('diart')); print('numpy', numpy.__version__); print('torch', torch.__version__); print('cuda', torch.cuda.is_available())"
+```
+
+```bash
+cd backend
+./.venv-diart/Scripts/python.exe -c "import numpy, torch, importlib.metadata as m; print('diart', m.version('diart')); print('numpy', numpy.__version__); print('torch', torch.__version__); print('cuda', torch.cuda.is_available())"
 ```
 
 期望 diart venv 使用：

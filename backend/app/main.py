@@ -24,7 +24,7 @@ from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService
-from app.services.sentiment_analysis_service import SentimentAnalysisService
+from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
         demo_client=demo_asr_client,
     )
     summary_service = SummaryService(dashscope_client)
-    sentiment_analysis_service = SentimentAnalysisService(dashscope_client)
+    meeting_analysis_service = MeetingAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
     upload_meeting_service = UploadMeetingService(
@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
         speaker_service=speaker_service,
         diarization_service=diarization_service,
         summary_service=summary_service,
-        sentiment_analysis_service=sentiment_analysis_service,
+        meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
     )
@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
         diarization_service=diarization_service,
         realtime_diarization_service=realtime_diarization_service,
         summary_service=summary_service,
-        sentiment_analysis_service=sentiment_analysis_service,
+        meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
     )
@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI):
     app.state.diarization_service = diarization_service
     app.state.realtime_diarization_service = realtime_diarization_service
     app.state.summary_service = summary_service
-    app.state.sentiment_analysis_service = sentiment_analysis_service
+    app.state.meeting_analysis_service = meeting_analysis_service
     app.state.translation_service = translation_service
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service

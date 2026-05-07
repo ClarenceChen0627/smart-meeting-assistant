@@ -17,7 +17,7 @@ from app.services.asr_provider_service import ASR_PROVIDER_DEMO, ASRProviderServ
 from app.services.audio_codec_service import AudioCodecService
 from app.services.diarization_service import DiarizationService
 from app.services.meeting_history_service import MeetingHistoryService
-from app.services.sentiment_analysis_service import SentimentAnalysisService
+from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
@@ -34,7 +34,7 @@ class UploadMeetingService:
         speaker_service: SpeakerService,
         diarization_service: DiarizationService,
         summary_service: SummaryService,
-        sentiment_analysis_service: SentimentAnalysisService,
+        meeting_analysis_service: MeetingAnalysisService,
         translation_service: TranslationService,
         meeting_history_service: MeetingHistoryService,
     ) -> None:
@@ -43,7 +43,7 @@ class UploadMeetingService:
         self._speaker_service = speaker_service
         self._diarization_service = diarization_service
         self._summary_service = summary_service
-        self._sentiment_analysis_service = sentiment_analysis_service
+        self._meeting_analysis_service = meeting_analysis_service
         self._translation_service = translation_service
         self._meeting_history_service = meeting_history_service
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -146,7 +146,7 @@ class UploadMeetingService:
                 )
 
             self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.ANALYZING)
-            analysis = await self._sentiment_analysis_service.analyze_meeting(transcripts, scene)
+            analysis = await self._meeting_analysis_service.analyze_meeting(transcripts, scene)
             self._meeting_history_service.update_analysis(meeting_id, analysis)
 
             self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.SUMMARIZING)

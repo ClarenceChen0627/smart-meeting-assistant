@@ -10,6 +10,10 @@ Language:
 Copy-Item .env.example .env
 ```
 
+```bash
+cp .env.example .env
+```
+
 前端 URL 覆盖配置放在 `frontend/.env.local`，从 `frontend/.env.example` 复制。
 
 ## Minimal Configuration Matrix
@@ -84,4 +88,11 @@ cd backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+```
+
+```bash
+cd backend
+./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+./.venv/Scripts/python.exe -m pytest
+./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
