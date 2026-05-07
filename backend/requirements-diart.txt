@@ -1,0 +1,21 @@
+# Optional realtime diarization worker environment.
+# Install into backend/.venv-diart, not backend/.venv.
+#
+# Example:
+#   .\.venv-diart\Scripts\python.exe -m pip install -i https://pypi.org/simple -r requirements-diart.txt
+#
+# diart 0.9.2 requires numpy<2. The torch/torchaudio pins avoid a pyannote.audio
+# 3.4 import failure with newer torchaudio versions that removed AudioMetaData.
+# pyannote.audio 3.4 still calls huggingface_hub with use_auth_token, which was
+# removed in huggingface_hub 1.x.
+# speechbrain 1.1.0 can lazily import optional k2_fsa on Windows during
+# pytorch-lightning checkpoint loading; 1.0.3 avoids that optional k2 dependency.
+numpy==1.26.4
+huggingface_hub<1
+speechbrain==1.0.3
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0
+pyannote.audio==3.4.0
+pyannote.core==5.0.0
+diart==0.9.2

@@ -21,8 +21,9 @@ from app.schemas.transcript import TranscriptItem, TranscriptSegment
 from app.schemas.ws_message import SpeakerUpdate, WebSocketMessage, WebSocketMessageType
 from app.services.asr_provider_service import ASRProviderSelection, ASRProviderService
 from app.services.audio_codec_service import AudioCodecService
-from app.services.diarization_service import DiarizationService
+from app.services.diarization_service import DiarizationService, DiarizationTurn
 from app.services.meeting_history_service import MeetingHistoryService
+from app.services.realtime_diarization_service import RealtimeDiarizationService, RealtimeDiarizationSession
 from app.services.sentiment_analysis_service import SentimentAnalysisService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -41,7 +42,9 @@ class MeetingSession:
     active_provider: str
     asr_client: ASRClient
     should_run_diarization: bool
+    should_run_realtime_diarization: bool
     audio_queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
+    realtime_diarization_queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     translation_queue: asyncio.Queue[tuple[int, str] | None] = field(default_factory=asyncio.Queue)
     transcripts: list[TranscriptItem] = field(default_factory=list)
     transcript_count: int = 0
@@ -56,7 +59,12 @@ class MeetingSession:
     translated_transcript_indices: set[int] = field(default_factory=set)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_task: asyncio.Task[None] | None = None
+    realtime_diarization_task: asyncio.Task[None] | None = None
     asr_stream: ASRStream | None = None
+    realtime_diarization_session: RealtimeDiarizationSession | None = None
+    realtime_diarization_turns: list[DiarizationTurn] = field(default_factory=list)
+    realtime_diarization_turn_keys: set[tuple[float, float, str]] = field(default_factory=set)
+    realtime_speaker_assignments: dict[int, str] = field(default_factory=dict)
     translation_worker_task: asyncio.Task[None] | None = None
     session_audio_path: Path | None = None
     session_audio_writer: wave.Wave_write | None = None
@@ -72,6 +80,7 @@ class SessionManager:
         audio_codec_service: AudioCodecService,
         speaker_service: SpeakerService,
         diarization_service: DiarizationService,
+        realtime_diarization_service: RealtimeDiarizationService,
         summary_service: SummaryService,
         sentiment_analysis_service: SentimentAnalysisService,
         translation_service: TranslationService,
@@ -82,6 +91,7 @@ class SessionManager:
         self._audio_codec_service = audio_codec_service
         self._speaker_service = speaker_service
         self._diarization_service = diarization_service
+        self._realtime_diarization_service = realtime_diarization_service
         self._summary_service = summary_service
         self._sentiment_analysis_service = sentiment_analysis_service
         self._translation_service = translation_service
@@ -114,8 +124,10 @@ class SessionManager:
             active_provider=selection.provider_name,
             asr_client=selection.client,
             should_run_diarization=selection.should_run_diarization,
+            should_run_realtime_diarization=selection.should_run_realtime_diarization,
         )
         self._open_session_audio_writer(session)
+        self._start_realtime_diarization(session)
         session.worker_task = asyncio.create_task(self._consume_audio(session))
         if normalized_target_lang and self._translation_service.is_configured:
             session.translation_worker_task = asyncio.create_task(self._consume_translations(session))
@@ -128,12 +140,16 @@ class SessionManager:
             await self._send_error(session, "Session is finalizing; audio chunk ignored.")
             return
         self._persist_session_audio(session, payload)
+        if session.realtime_diarization_task is not None:
+            await session.realtime_diarization_queue.put(payload)
         await session.audio_queue.put(payload)
 
     async def finalize(self, session: MeetingSession) -> None:
         if session.finalizing:
             return
         session.finalizing = True
+        if session.realtime_diarization_task is not None:
+            await session.realtime_diarization_queue.put(None)
         await session.audio_queue.put(None)
         if session.worker_task is not None:
             await session.worker_task
@@ -152,6 +168,15 @@ class SessionManager:
                 await session.translation_worker_task
             except asyncio.CancelledError:
                 pass
+        if session.realtime_diarization_task is not None and not session.realtime_diarization_task.done():
+            session.realtime_diarization_task.cancel()
+            try:
+                await session.realtime_diarization_task
+            except asyncio.CancelledError:
+                pass
+        if session.realtime_diarization_session is not None:
+            await session.realtime_diarization_session.aclose()
+            session.realtime_diarization_session = None
         if session.analysis_task is not None and not session.analysis_task.done():
             session.analysis_task.cancel()
             try:
@@ -218,6 +243,17 @@ class SessionManager:
                         )
                     finally:
                         session.translation_worker_task = None
+                if session.realtime_diarization_task is not None:
+                    try:
+                        await session.realtime_diarization_task
+                    except RuntimeError as exc:
+                        logger.exception("Waiting for realtime diarization worker failed for %s", session.session_id)
+                        await self._send_error_once(
+                            session,
+                            str(exc).strip() or exc.__class__.__name__,
+                        )
+                    finally:
+                        session.realtime_diarization_task = None
                 await self._finalize_speakers(session)
                 await self._send_analysis(session, force=True)
                 await self._send_summary(session, force=True)
@@ -262,6 +298,19 @@ class SessionManager:
                 )
                 await self._handle_asr_error(session, str(fallback_exc).strip() or fallback_exc.__class__.__name__)
 
+    def _start_realtime_diarization(self, session: MeetingSession) -> None:
+        if not session.should_run_realtime_diarization:
+            return
+        if session.realtime_diarization_task is not None:
+            return
+
+        realtime_session = self._realtime_diarization_service.create_session(session.session_id)
+        if realtime_session is None:
+            return
+
+        session.realtime_diarization_session = realtime_session
+        session.realtime_diarization_task = asyncio.create_task(self._consume_realtime_diarization(session))
+
     async def _handle_segment(self, session: MeetingSession, segment: TranscriptSegment) -> None:
         transcript_is_final = getattr(segment, "transcript_is_final", True)
         speaker = getattr(segment, "speaker", None)
@@ -284,6 +333,7 @@ class SessionManager:
                 session.active_partial_transcript_index = session.transcript_count
                 session.transcript_count += 1
                 await self._send_transcript(session, transcript)
+                await self._apply_realtime_speaker_updates(session)
                 return
 
             transcript_index = session.active_partial_transcript_index
@@ -298,6 +348,7 @@ class SessionManager:
             )
             session.transcripts[transcript_index] = updated
             await self._send_transcript_update(session, updated)
+            await self._apply_realtime_speaker_updates(session)
             return
 
         if session.active_partial_transcript_index is not None:
@@ -314,6 +365,7 @@ class SessionManager:
             session.transcripts[transcript_index] = updated
             session.active_partial_transcript_index = None
             await self._send_transcript_update(session, updated)
+            await self._apply_realtime_speaker_updates(session)
             await self._postprocess_final_transcript(session, updated)
             return
 
@@ -327,6 +379,7 @@ class SessionManager:
         session.transcripts.append(transcript)
         session.transcript_count += 1
         await self._send_transcript(session, transcript)
+        await self._apply_realtime_speaker_updates(session)
         await self._postprocess_final_transcript(session, transcript)
 
     async def _handle_asr_error(self, session: MeetingSession, message: str) -> None:
@@ -370,6 +423,73 @@ class SessionManager:
                     transcript_index=transcript_index,
                     target_lang=session.target_lang,
                     text=translated_text,
+                ),
+            )
+
+    async def _consume_realtime_diarization(self, session: MeetingSession) -> None:
+        if session.realtime_diarization_session is None:
+            return
+
+        while True:
+            payload = await session.realtime_diarization_queue.get()
+            if payload is None:
+                turns = await session.realtime_diarization_session.finish()
+                self._merge_realtime_turns(session, turns)
+                await self._apply_realtime_speaker_updates(session)
+                break
+
+            turns = await session.realtime_diarization_session.process_audio(payload)
+            self._merge_realtime_turns(session, turns)
+            await self._apply_realtime_speaker_updates(session)
+
+    def _merge_realtime_turns(
+        self,
+        session: MeetingSession,
+        turns: list[DiarizationTurn],
+    ) -> None:
+        for turn in turns:
+            key = (
+                round(turn.start, 3),
+                round(turn.end, 3),
+                turn.speaker_label,
+            )
+            if key in session.realtime_diarization_turn_keys:
+                continue
+            session.realtime_diarization_turn_keys.add(key)
+            session.realtime_diarization_turns.append(turn)
+        session.realtime_diarization_turns.sort(key=lambda item: (item.start, item.end, item.speaker_label))
+
+    async def _apply_realtime_speaker_updates(self, session: MeetingSession) -> None:
+        if not session.realtime_diarization_turns or not session.transcripts:
+            return
+
+        assigned = self._diarization_service.assign_speakers(
+            session.transcripts,
+            session.realtime_diarization_turns,
+            speaker_is_final=False,
+        )
+        for transcript_index, assigned_transcript in enumerate(assigned):
+            if assigned_transcript.speaker == self._speaker_service.UNKNOWN_SPEAKER:
+                continue
+            current = session.transcripts[transcript_index]
+            if current.speaker_is_final:
+                continue
+            if session.realtime_speaker_assignments.get(transcript_index) == assigned_transcript.speaker:
+                continue
+
+            updated = self._speaker_service.update_speaker(
+                current,
+                speaker=assigned_transcript.speaker,
+                speaker_is_final=False,
+            )
+            session.transcripts[transcript_index] = updated
+            session.realtime_speaker_assignments[transcript_index] = updated.speaker
+            await self._send_speaker_update(
+                session,
+                SpeakerUpdate(
+                    transcript_index=updated.transcript_index,
+                    speaker=updated.speaker,
+                    speaker_is_final=updated.speaker_is_final,
                 ),
             )
 
@@ -599,6 +719,7 @@ class SessionManager:
         session.active_provider = selection.provider_name
         session.asr_client = selection.client
         session.should_run_diarization = selection.should_run_diarization
+        session.should_run_realtime_diarization = selection.should_run_realtime_diarization
         if session.should_run_diarization:
             self._open_session_audio_writer(session)
         else:
@@ -606,6 +727,8 @@ class SessionManager:
             if session.session_audio_path is not None:
                 session.session_audio_path.unlink(missing_ok=True)
                 session.session_audio_path = None
+        if session.should_run_realtime_diarization:
+            self._start_realtime_diarization(session)
 
     def _open_session_audio_writer(self, session: MeetingSession) -> None:
         if not session.should_run_diarization or session.session_audio_writer is not None:

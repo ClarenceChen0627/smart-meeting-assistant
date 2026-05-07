@@ -24,7 +24,14 @@ class AudioCodecService:
             raise RuntimeError("FFMPEG_BINARY is empty.")
 
         direct_path = Path(configured_binary)
-        if direct_path.exists():
+        try:
+            direct_path_exists = direct_path.exists()
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot access configured FFMPEG_BINARY={configured_binary!r}: {exc}"
+            ) from exc
+
+        if direct_path_exists:
             self._resolved_ffmpeg_binary = str(direct_path)
             return self._resolved_ffmpeg_binary
 

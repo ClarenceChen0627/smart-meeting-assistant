@@ -26,6 +26,20 @@ BACKEND_ROOT = CURRENT_FILE.parents[2]
 PROJECT_ROOT = CURRENT_FILE.parents[3]
 
 
+def _configure_huggingface_cache() -> None:
+    for env_name in ("HF_HOME", "HF_HUB_CACHE", "PYANNOTE_CACHE"):
+        configured = os.getenv(env_name, "").strip()
+        if not configured:
+            continue
+        cache_path = Path(configured).expanduser()
+        if not cache_path.is_absolute():
+            cache_path = PROJECT_ROOT / cache_path
+        os.environ[env_name] = str(cache_path.resolve())
+
+
+_configure_huggingface_cache()
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = os.getenv("HOST", "0.0.0.0")
@@ -92,6 +106,12 @@ class Settings:
         "DIARIZATION_MODEL",
         "pyannote/speaker-diarization-community-1",
     )
+    realtime_diarization_duration_seconds: float = float(os.getenv("REALTIME_DIARIZATION_DURATION_SECONDS", "5"))
+    realtime_diarization_step_seconds: float = float(os.getenv("REALTIME_DIARIZATION_STEP_SECONDS", "0.5"))
+    realtime_diarization_latency_seconds: float = float(os.getenv("REALTIME_DIARIZATION_LATENCY_SECONDS", "1"))
+    diart_segmentation_model: str = os.getenv("DIART_SEGMENTATION_MODEL", "pyannote/segmentation").strip() or "pyannote/segmentation"
+    diart_embedding_model: str = os.getenv("DIART_EMBEDDING_MODEL", "pyannote/embedding").strip() or "pyannote/embedding"
+    diart_python_path: str = os.getenv("DIART_PYTHON_PATH", "").strip()
 
     @property
     def asr_configured(self) -> bool:
@@ -111,7 +131,11 @@ class Settings:
 
     @property
     def diarization_enabled(self) -> bool:
-        return self.diarization_mode == "offline"
+        return self.diarization_mode in {"offline", "hybrid"}
+
+    @property
+    def realtime_diarization_enabled(self) -> bool:
+        return self.diarization_mode == "hybrid"
 
     @property
     def resolved_meeting_history_db_path(self) -> Path:

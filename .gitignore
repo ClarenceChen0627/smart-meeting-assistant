@@ -21,6 +21,7 @@ __pycache__/
 venv/
 env/
 .venv
+.venv-diart/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -59,3 +60,4 @@ logs/
 
 # App data
 data/
+models/
