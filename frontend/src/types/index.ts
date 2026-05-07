@@ -14,7 +14,7 @@ export interface SpeakerUpdate {
   speaker_is_final: true
 }
 
-export type ASRProvider = 'volcengine' | 'dashscope'
+export type ASRProvider = 'volcengine' | 'dashscope' | 'demo'
 export type MeetingHistoryStatus = 'draft' | 'processing' | 'failed' | 'finalized'
 export type MeetingSourceType = 'live' | 'upload'
 export type MeetingProcessingStage = 'transcribing' | 'translating' | 'analyzing' | 'summarizing'

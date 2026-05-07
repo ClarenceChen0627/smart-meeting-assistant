@@ -14,6 +14,8 @@ from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
 from app.clients.dashscope_asr_client import DashScopeASRClient
 from app.clients.dashscope_client import DashScopeClient
+from app.clients.demo_asr_client import DemoASRClient
+from app.clients.demo_dashscope_client import DemoDashScopeClient
 from app.clients.volcengine_asr_client import VolcengineASRClient
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -38,7 +40,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def lifespan(app: FastAPI):
     dashscope_asr_client = DashScopeASRClient(settings)
     volcengine_asr_client = VolcengineASRClient(settings)
-    dashscope_client = DashScopeClient(settings)
+    demo_asr_client = DemoASRClient(settings)
+    dashscope_client = DemoDashScopeClient(settings) if settings.demo_mode else DashScopeClient(settings)
     audio_codec_service = AudioCodecService(settings)
     speaker_service = SpeakerService()
     diarization_service = DiarizationService(settings, speaker_service)
@@ -47,6 +50,7 @@ async def lifespan(app: FastAPI):
         settings=settings,
         dashscope_client=dashscope_asr_client,
         volcengine_client=volcengine_asr_client,
+        demo_client=demo_asr_client,
     )
     summary_service = SummaryService(dashscope_client)
     sentiment_analysis_service = SentimentAnalysisService(dashscope_client)
@@ -79,6 +83,7 @@ async def lifespan(app: FastAPI):
     app.state.asr_client = dashscope_asr_client
     app.state.dashscope_asr_client = dashscope_asr_client
     app.state.volcengine_asr_client = volcengine_asr_client
+    app.state.demo_asr_client = demo_asr_client
     app.state.asr_provider_service = asr_provider_service
     app.state.dashscope_client = dashscope_client
     app.state.audio_codec_service = audio_codec_service
@@ -109,6 +114,8 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.warning("Volcengine ASR is not configured.")
+    if settings.demo_mode:
+        logger.info("Demo mode is enabled. Deterministic demo ASR, translation, summary, and analysis are available.")
     if translation_service.is_configured:
         logger.info("Using DashScope translation model: %s", settings.dashscope_translation_model)
     if settings.diarization_enabled:
@@ -128,6 +135,7 @@ async def lifespan(app: FastAPI):
     await upload_meeting_service.shutdown()
     await dashscope_asr_client.aclose()
     await volcengine_asr_client.aclose()
+    await demo_asr_client.aclose()
     await dashscope_client.aclose()
 
 

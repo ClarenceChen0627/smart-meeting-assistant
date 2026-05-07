@@ -40,6 +40,13 @@ def _configure_huggingface_cache() -> None:
 _configure_huggingface_cache()
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = os.getenv("HOST", "0.0.0.0")
@@ -47,6 +54,7 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     service_name: str = "Smart Meeting Assistant Backend"
     service_version: str = "2.0.0"
+    demo_mode: bool = _env_flag("DEMO_MODE", False)
 
     ffmpeg_binary: str = os.getenv("FFMPEG_BINARY", "ffmpeg")
     sample_rate: int = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
