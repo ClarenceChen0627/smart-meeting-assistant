@@ -875,6 +875,7 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 - action item 状态变化：`update_action_item_status()`。
 - summary 手动编辑：`update_summary_fields()`。
 - 标题手动编辑：`update_title()`。
+- speaker label 手动修正：`update_speakers()`。
 
 全局术语通过 `GlossaryStoreService` 写入。`GlossaryService.resolve_terms()` 按“单场会议术语、全局术语、`CUSTOM_GLOSSARY_TERMS`”的顺序合并，并按大小写不敏感的 `term` 去重，处理上限仍为 50 条。
 
@@ -885,9 +886,12 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 - `GET /api/meetings`：返回 `MeetingHistoryListItem[]`。
 - `GET /api/meetings/{meeting_id}`：返回完整 `MeetingRecord`。
 - `PATCH /api/meetings/{meeting_id}/title`：更新标题。
+- `PATCH /api/meetings/{meeting_id}/speakers`：重命名或合并 speaker。
 - `PATCH /api/meetings/{meeting_id}/summary`：更新 summary。
 - `PATCH /api/meetings/{meeting_id}/action-items/{action_item_index}`：更新行动项状态。
 - `DELETE /api/meetings/{meeting_id}`：删除会议。
+
+speaker 修正只允许在会议状态为 `finalized` 或 `failed` 后执行。后端会写回 transcript speaker label，同步精确匹配的 action item assignee，并基于现有 highlights 重建参与者级 analysis 汇总；不会自动重跑 LLM 总结或分析。
 
 `backend/app/api/glossary.py` 提供：
 
@@ -901,6 +905,7 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 - 查看 live/upload 会议。
 - 显示状态、来源、场景、目标语言、transcript 数量、provider、processing stage、preview。
 - 重命名会议。
+- 在 Transcript 面板重命名或合并 speaker。
 - 删除会议。
 - 刷新列表。
 

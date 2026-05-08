@@ -106,10 +106,13 @@ The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, anal
 - meeting summary
 - meeting analysis
 - generated or manually edited titles
+- manually edited speaker labels
 - manually edited summary fields
 - action item status/content updates
 
-The history APIs support list, detail, title update, summary update, action item status update, and deletion.
+The history APIs support list, detail, title update, speaker rename/merge, summary update, action item status update, and deletion.
+
+Speaker corrections are persisted through `PATCH /api/meetings/{meeting_id}/speakers` after a meeting reaches `finalized` or `failed`. The backend updates transcript rows, exact action item assignee references, and participant-level analysis rollups without rerunning LLM summary or analysis generation.
 
 `GlossaryStoreService` uses the same local SQLite file to store global terminology terms. `GlossaryService.resolve_terms()` merges per-meeting terms, saved global terms, and `CUSTOM_GLOSSARY_TERMS` in that order, deduplicating by case-insensitive `term` and keeping the same 50-term processing limit.
 

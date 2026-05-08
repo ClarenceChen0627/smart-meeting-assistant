@@ -5,13 +5,21 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.schemas.analysis import MeetingAnalysis
+from app.schemas.analysis import (
+    MeetingAnalysis,
+    MeetingAnalysisHighlight,
+    MeetingEngagementLevel,
+    MeetingSentimentLevel,
+    MeetingSignalCounts,
+    ParticipantAnalysis,
+)
 from app.schemas.meeting_history import (
     MeetingHistoryListItem,
     MeetingHistoryStatus,
     MeetingHistoryTranscriptItem,
     MeetingProcessingStage,
     MeetingRecord,
+    MeetingSpeakerUpdate,
     MeetingSourceType,
     RawAudioMetadata,
 )
@@ -317,6 +325,127 @@ class MeetingHistoryService:
                     _utc_now_iso(),
                     meeting_id,
                 ),
+            )
+
+        return self.get_meeting(meeting_id)
+
+    def update_speakers(self, meeting_id: str, update: MeetingSpeakerUpdate) -> MeetingRecord | None:
+        speaker_map = self._build_speaker_update_map(update)
+        timestamp = _utc_now_iso()
+        with self._connect() as connection:
+            meeting_row = connection.execute(
+                """
+                SELECT status, summary_json, analysis_json
+                FROM meetings
+                WHERE meeting_id = ?
+                """,
+                (meeting_id,),
+            ).fetchone()
+            if meeting_row is None:
+                return None
+
+            status = meeting_row["status"]
+            if status not in {MeetingHistoryStatus.FINALIZED.value, MeetingHistoryStatus.FAILED.value}:
+                raise ValueError("Speaker labels can only be edited for finalized or failed saved meetings.")
+
+            transcript_rows = connection.execute(
+                """
+                SELECT
+                    transcript_index,
+                    speaker,
+                    speaker_is_final,
+                    transcript_is_final,
+                    text,
+                    start,
+                    end,
+                    translated_text,
+                    translated_target_lang
+                FROM meeting_transcripts
+                WHERE meeting_id = ?
+                ORDER BY transcript_index ASC
+                """,
+                (meeting_id,),
+            ).fetchall()
+            existing_speakers = {row["speaker"] for row in transcript_rows}
+            matched_speakers = existing_speakers.intersection(speaker_map)
+            if not matched_speakers:
+                raise ValueError("No matching speaker labels were found for this meeting.")
+
+            self._update_transcript_speakers(connection, meeting_id, speaker_map)
+
+            summary_json = meeting_row["summary_json"]
+            if summary_json:
+                summary = MeetingSummary.model_validate_json(summary_json)
+                updated_summary = self._update_summary_speaker_references(summary, speaker_map)
+                connection.execute(
+                    """
+                    UPDATE meetings
+                    SET summary_json = ?, preview_text = ?, updated_at = ?
+                    WHERE meeting_id = ?
+                    """,
+                    (
+                        json.dumps(updated_summary.model_dump()),
+                        self._build_summary_preview(updated_summary),
+                        timestamp,
+                        meeting_id,
+                    ),
+                )
+
+            analysis_json = meeting_row["analysis_json"]
+            if analysis_json:
+                updated_rows = connection.execute(
+                    """
+                    SELECT
+                        transcript_index,
+                        speaker,
+                        speaker_is_final,
+                        transcript_is_final,
+                        text,
+                        start,
+                        end,
+                        translated_text,
+                        translated_target_lang
+                    FROM meeting_transcripts
+                    WHERE meeting_id = ?
+                    ORDER BY transcript_index ASC
+                    """,
+                    (meeting_id,),
+                ).fetchall()
+                transcripts = [
+                    MeetingHistoryTranscriptItem(
+                        transcript_index=row["transcript_index"],
+                        speaker=row["speaker"],
+                        speaker_is_final=bool(row["speaker_is_final"]),
+                        transcript_is_final=bool(row["transcript_is_final"]),
+                        text=row["text"],
+                        start=row["start"],
+                        end=row["end"],
+                        translated_text=row["translated_text"],
+                        translated_target_lang=row["translated_target_lang"],
+                    )
+                    for row in updated_rows
+                ]
+                analysis = MeetingAnalysis.model_validate_json(analysis_json)
+                updated_analysis = analysis.model_copy(
+                    update={
+                        "participants": self._build_participant_analyses(
+                            transcripts,
+                            analysis.highlights,
+                        )
+                    }
+                )
+                connection.execute(
+                    """
+                    UPDATE meetings
+                    SET analysis_json = ?, updated_at = ?
+                    WHERE meeting_id = ?
+                    """,
+                    (json.dumps(updated_analysis.model_dump()), timestamp, meeting_id),
+                )
+
+            connection.execute(
+                "UPDATE meetings SET updated_at = ? WHERE meeting_id = ?",
+                (timestamp, meeting_id),
             )
 
         return self.get_meeting(meeting_id)
@@ -681,6 +810,171 @@ class MeetingHistoryService:
             """,
             (MeetingSourceType.LIVE.value,),
         )
+
+    @staticmethod
+    def _update_transcript_speakers(
+        connection: sqlite3.Connection,
+        meeting_id: str,
+        speaker_map: dict[str, str],
+    ) -> None:
+        when_clauses = " ".join("WHEN ? THEN ?" for _ in speaker_map)
+        placeholders = ", ".join("?" for _ in speaker_map)
+        parameters: list[str] = []
+        for source_speaker, target_speaker in speaker_map.items():
+            parameters.extend([source_speaker, target_speaker])
+        parameters.extend([meeting_id, *speaker_map.keys()])
+        connection.execute(
+            f"""
+            UPDATE meeting_transcripts
+            SET speaker = CASE speaker {when_clauses} ELSE speaker END
+            WHERE meeting_id = ? AND speaker IN ({placeholders})
+            """,
+            parameters,
+        )
+
+    @classmethod
+    def _build_speaker_update_map(cls, update: MeetingSpeakerUpdate) -> dict[str, str]:
+        speaker_map: dict[str, str] = {}
+        for item in update.speaker_updates:
+            source = cls._normalize_speaker_label(item.from_)
+            target = cls._normalize_speaker_label(item.to)
+            if source == target:
+                continue
+            if source in speaker_map and speaker_map[source] != target:
+                raise ValueError(f"Speaker label {source!r} has conflicting target labels.")
+            speaker_map[source] = target
+        if not speaker_map:
+            raise ValueError("At least one speaker label must change.")
+        return speaker_map
+
+    @classmethod
+    def _update_summary_speaker_references(
+        cls,
+        summary: MeetingSummary,
+        speaker_map: dict[str, str],
+    ) -> MeetingSummary:
+        action_items = [
+            item.model_copy(update={"assignee": speaker_map[item.assignee]})
+            if item.assignee in speaker_map
+            else item
+            for item in summary.action_items
+        ]
+        return summary.model_copy(update={"action_items": action_items})
+
+    @classmethod
+    def _build_participant_analyses(
+        cls,
+        transcripts: list[MeetingHistoryTranscriptItem],
+        highlights: list[MeetingAnalysisHighlight],
+    ) -> list[ParticipantAnalysis]:
+        speaker_stats: dict[str, dict[str, object]] = {}
+        for transcript in transcripts:
+            speaker = transcript.speaker or "Unknown"
+            stats = speaker_stats.setdefault(
+                speaker,
+                {
+                    "transcript_count": 0,
+                    "speaking_time_seconds": 0.0,
+                    "highlights": [],
+                },
+            )
+            stats["transcript_count"] = int(stats["transcript_count"]) + 1
+            stats["speaking_time_seconds"] = float(stats["speaking_time_seconds"]) + max(
+                0.0,
+                transcript.end - transcript.start,
+            )
+
+        for highlight in highlights:
+            if highlight.transcript_index < 0 or highlight.transcript_index >= len(transcripts):
+                continue
+            speaker = transcripts[highlight.transcript_index].speaker or "Unknown"
+            stats = speaker_stats.setdefault(
+                speaker,
+                {
+                    "transcript_count": 0,
+                    "speaking_time_seconds": 0.0,
+                    "highlights": [],
+                },
+            )
+            speaker_highlights = stats["highlights"]
+            if isinstance(speaker_highlights, list):
+                speaker_highlights.append(highlight)
+
+        max_transcript_count = max(
+            (int(stats["transcript_count"]) for stats in speaker_stats.values()),
+            default=1,
+        )
+        participants: list[ParticipantAnalysis] = []
+        for speaker, stats in speaker_stats.items():
+            speaker_highlights = [
+                highlight
+                for highlight in stats["highlights"]
+                if isinstance(highlight, MeetingAnalysisHighlight)
+            ]
+            counts = cls._build_signal_counts(speaker_highlights)
+            total_signals = counts.agreement + counts.disagreement + counts.tension + counts.hesitation
+            negative_signals = counts.disagreement + counts.tension
+            if negative_signals and counts.agreement:
+                sentiment = MeetingSentimentLevel.MIXED
+            elif negative_signals:
+                sentiment = MeetingSentimentLevel.NEGATIVE
+            elif counts.agreement:
+                sentiment = MeetingSentimentLevel.POSITIVE
+            else:
+                sentiment = MeetingSentimentLevel.NEUTRAL
+
+            transcript_count = int(stats["transcript_count"])
+            if total_signals >= 2 or transcript_count >= max(3, max_transcript_count):
+                engagement = MeetingEngagementLevel.HIGH
+            elif total_signals >= 1 or transcript_count > 0:
+                engagement = MeetingEngagementLevel.MEDIUM
+            else:
+                engagement = MeetingEngagementLevel.LOW
+
+            participants.append(
+                ParticipantAnalysis(
+                    speaker=speaker,
+                    transcript_count=transcript_count,
+                    speaking_time_seconds=round(float(stats["speaking_time_seconds"]), 2),
+                    signal_counts=counts,
+                    sentiment=sentiment,
+                    engagement_level=engagement,
+                    engagement_summary=cls._build_participant_summary(
+                        speaker,
+                        transcript_count=transcript_count,
+                        total_signals=total_signals,
+                    ),
+                )
+            )
+        return sorted(participants, key=lambda item: (-item.transcript_count, item.speaker))
+
+    @staticmethod
+    def _build_signal_counts(highlights: list[MeetingAnalysisHighlight]) -> MeetingSignalCounts:
+        counts = MeetingSignalCounts()
+        for highlight in highlights:
+            current = getattr(counts, highlight.signal.value)
+            setattr(counts, highlight.signal.value, current + 1)
+        return counts
+
+    @staticmethod
+    def _build_participant_summary(
+        speaker: str,
+        *,
+        transcript_count: int,
+        total_signals: int,
+    ) -> str:
+        if total_signals:
+            return f"{speaker} contributed {transcript_count} utterances with {total_signals} interaction signals."
+        return f"{speaker} contributed {transcript_count} utterances with no explicit interaction signals."
+
+    @staticmethod
+    def _normalize_speaker_label(value: str) -> str:
+        normalized = " ".join(value.split()).strip()
+        if not normalized:
+            raise ValueError("Speaker label cannot be empty.")
+        if len(normalized) > 80:
+            raise ValueError("Speaker label must be 80 characters or fewer.")
+        return normalized
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)

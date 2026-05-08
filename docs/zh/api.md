@@ -44,6 +44,7 @@ Language:
 - `GET /api/meetings/{meeting_id}`
 - `PATCH /api/meetings/{meeting_id}/title`
 - `PATCH /api/meetings/{meeting_id}/summary`
+- `PATCH /api/meetings/{meeting_id}/speakers`
 - `PATCH /api/meetings/{meeting_id}/action-items/{action_item_index}`
 - `DELETE /api/meetings/{meeting_id}`
 - `POST /api/meetings/upload`
@@ -86,6 +87,24 @@ Language:
 `PATCH /api/glossary/terms/{term_id}` 可更新 `term`、`replacement`、`note` 的任意子集。`DELETE /api/glossary/terms/{term_id}` 删除已保存术语。
 
 重复术语按大小写不敏感方式返回 `409 Conflict`。如果单场会议术语和已保存术语的 `term` 相同，单场会议术语优先。
+
+## Speaker 修正
+
+`PATCH /api/meetings/{meeting_id}/speakers`
+
+用于重命名或合并已保存会议的 speaker label。只允许在会议状态为 `finalized` 或 `failed` 后调用；`draft` 实时会议和 `processing` 上传会议会返回 `409 Conflict`。
+
+```json
+{
+  "speaker_updates": [
+    { "from": "Speaker 1", "to": "Alice" },
+    { "from": "Speaker 3", "to": "Alice" },
+    { "from": "Speaker 2", "to": "Bob" }
+  ]
+}
+```
+
+多个 `from` 指向同一个 `to` 即表示合并 speaker。接口返回更新后的 `MeetingRecord`。后端会写回 transcript speaker label，同步精确匹配的 action item assignee，并重建参与者级 analysis 汇总；不会自动重跑 LLM 总结或分析。
 
 ## Upload Meeting
 

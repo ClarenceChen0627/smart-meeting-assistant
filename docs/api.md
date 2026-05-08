@@ -44,6 +44,7 @@ Returns service metadata, `demoMode`, and provider availability.
 - `GET /api/meetings/{meeting_id}`
 - `PATCH /api/meetings/{meeting_id}/title`
 - `PATCH /api/meetings/{meeting_id}/summary`
+- `PATCH /api/meetings/{meeting_id}/speakers`
 - `PATCH /api/meetings/{meeting_id}/action-items/{action_item_index}`
 - `DELETE /api/meetings/{meeting_id}`
 - `POST /api/meetings/upload`
@@ -86,6 +87,24 @@ Returns saved terms:
 `PATCH /api/glossary/terms/{term_id}` accepts any subset of `term`, `replacement`, and `note`. `DELETE /api/glossary/terms/{term_id}` removes a saved term.
 
 Duplicate terms are rejected case-insensitively with `409 Conflict`. Per-meeting terms take precedence when a saved term uses the same `term`.
+
+## Speaker Corrections
+
+`PATCH /api/meetings/{meeting_id}/speakers`
+
+Renames or merges speaker labels for saved meetings. This endpoint is allowed only after a meeting is `finalized` or `failed`; `draft` live sessions and `processing` uploads return `409 Conflict`.
+
+```json
+{
+  "speaker_updates": [
+    { "from": "Speaker 1", "to": "Alice" },
+    { "from": "Speaker 3", "to": "Alice" },
+    { "from": "Speaker 2", "to": "Bob" }
+  ]
+}
+```
+
+Multiple `from` labels can point to the same `to` label to merge speakers. The response is the updated `MeetingRecord`. The backend updates transcript speaker labels, exact action item assignee references, and participant-level analysis rollups. It does not rerun LLM summary or analysis generation.
 
 ## Upload Meeting
 

@@ -104,3 +104,12 @@ class MeetingRecord(BaseModel):
 
 class MeetingTitleUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+
+
+class SpeakerLabelUpdate(BaseModel):
+    from_: str = Field(alias="from", min_length=1, max_length=80)
+    to: str = Field(min_length=1, max_length=80)
+
+
+class MeetingSpeakerUpdate(BaseModel):
+    speaker_updates: list[SpeakerLabelUpdate] = Field(min_length=1, max_length=50)
