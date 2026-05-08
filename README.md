@@ -77,7 +77,7 @@ Use [Configuration](docs/configuration.md) for the minimal variable matrix and d
 - Optional per-upload raw audio retention with saved meeting metadata.
 - Participant-level analysis rollups for speaker engagement and interaction signals.
 - Persistent custom terminology glossary support for live and uploaded meetings.
-- Editable saved titles, summary fields, and action item status.
+- Editable saved titles, speaker labels, summary fields, and action item status.
 - Optional Windows portable Electron client.
 
 ## Project Structure

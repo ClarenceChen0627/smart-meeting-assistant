@@ -76,7 +76,7 @@ npm run dev
 - SQLite 历史会议保存，覆盖 live 和 upload 两类来源。
 - 上传会议可选择保留原始音频，并在历史记录中保存音频元数据。
 - live 和 upload 均支持持久化自定义术语表，用于术语纠错和总结 / 分析提示。
-- 已保存会议可改标题、总结字段和行动项状态。
+- 已保存会议可改标题、speaker label、总结字段和行动项状态。
 - 可选 Windows portable Electron 桌面客户端。
 
 ## 项目结构

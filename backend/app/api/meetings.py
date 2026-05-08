@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
 
-from app.schemas.meeting_history import MeetingHistoryListItem, MeetingRecord, MeetingTitleUpdate
+from app.schemas.meeting_history import MeetingHistoryListItem, MeetingRecord, MeetingSpeakerUpdate, MeetingTitleUpdate
 from app.schemas.summary import ActionItemStatusUpdate, SummaryUpdate
 
 router = APIRouter()
@@ -74,6 +74,25 @@ async def update_meeting_summary(
 ) -> MeetingRecord:
     try:
         meeting = request.app.state.meeting_history_service.update_summary_fields(
+            meeting_id,
+            payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting record not found.")
+    return meeting
+
+
+@router.patch("/api/meetings/{meeting_id}/speakers", response_model=MeetingRecord)
+async def update_meeting_speakers(
+    request: Request,
+    meeting_id: str,
+    payload: MeetingSpeakerUpdate,
+) -> MeetingRecord:
+    try:
+        meeting = request.app.state.meeting_history_service.update_speakers(
             meeting_id,
             payload,
         )

@@ -15,10 +15,11 @@ from app.clients.demo_dashscope_client import DemoDashScopeClient
 from app.clients.volcengine_asr_client import VolcengineTranscriptSegment
 from app.services.asr_provider_service import ASRProviderService
 from app.core.config import Settings
-from app.schemas.analysis import MeetingAnalysis
+from app.schemas.analysis import MeetingAnalysis, MeetingAnalysisHighlight, MeetingSignalCounts, ParticipantAnalysis
 from app.schemas.glossary import GlossaryTermCreate
+from app.schemas.meeting_history import MeetingHistoryStatus, MeetingSourceType
 from app.schemas.summary import MeetingSummary
-from app.schemas.transcript import TranscriptSegment
+from app.schemas.transcript import TranscriptItem, TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
 from app.services.glossary_service import GlossaryService
 from app.services.glossary_store_service import GlossaryStoreService
@@ -1529,6 +1530,255 @@ def test_meeting_summary_update_requires_existing_summary(tmp_path) -> None:
         )
 
     assert response.status_code == 409
+
+
+def test_meeting_speaker_update_renames_and_merges_saved_references(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="meeting-with-speakers",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.upsert_transcript(
+        "meeting-with-speakers",
+        TranscriptItem(
+            transcript_index=0,
+            speaker="Speaker 1",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="I agree with the launch plan.",
+            start=0.0,
+            end=3.0,
+        ),
+    )
+    history_service.upsert_transcript(
+        "meeting-with-speakers",
+        TranscriptItem(
+            transcript_index=1,
+            speaker="Speaker 2",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="I will send the checklist.",
+            start=3.0,
+            end=7.0,
+        ),
+    )
+    history_service.upsert_transcript(
+        "meeting-with-speakers",
+        TranscriptItem(
+            transcript_index=2,
+            speaker="Speaker 3",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="I also agree.",
+            start=7.0,
+            end=9.0,
+        ),
+    )
+    history_service.update_summary(
+        "meeting-with-speakers",
+        MeetingSummary(
+            title="Launch plan",
+            overview="The team reviewed launch planning.",
+            action_items=[
+                {
+                    "task": "Send checklist",
+                    "assignee": "Speaker 2",
+                    "deadline": "Today",
+                    "status": "pending",
+                    "source_excerpt": "I will send the checklist.",
+                    "transcript_index": 1,
+                    "is_actionable": True,
+                    "confidence": 0.9,
+                    "owner_explicit": True,
+                    "deadline_explicit": False,
+                }
+            ],
+        ),
+    )
+    history_service.update_analysis(
+        "meeting-with-speakers",
+        MeetingAnalysis(
+            overall_sentiment="positive",
+            engagement_level="medium",
+            engagement_summary="The meeting had agreement.",
+            signal_counts=MeetingSignalCounts(agreement=2),
+            highlights=[
+                MeetingAnalysisHighlight(
+                    transcript_index=0,
+                    signal="agreement",
+                    severity="medium",
+                    reason="Speaker agrees.",
+                ),
+                MeetingAnalysisHighlight(
+                    transcript_index=2,
+                    signal="agreement",
+                    severity="low",
+                    reason="Speaker also agrees.",
+                ),
+            ],
+            participants=[
+                ParticipantAnalysis(speaker="Speaker 1", transcript_count=1),
+                ParticipantAnalysis(speaker="Speaker 2", transcript_count=1),
+                ParticipantAnalysis(speaker="Speaker 3", transcript_count=1),
+            ],
+        ),
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/meetings/meeting-with-speakers/speakers",
+            json={
+                "speaker_updates": [
+                    {"from": "Speaker 1", "to": "Alice"},
+                    {"from": "Speaker 3", "to": "Alice"},
+                    {"from": "Speaker 2", "to": "Bob"},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["speaker"] for item in payload["transcripts"]] == ["Alice", "Bob", "Alice"]
+    assert payload["summary"]["action_items"][0]["assignee"] == "Bob"
+    assert [item["speaker"] for item in payload["analysis"]["participants"]] == ["Alice", "Bob"]
+    alice = payload["analysis"]["participants"][0]
+    assert alice["transcript_count"] == 2
+    assert alice["speaking_time_seconds"] == 5.0
+    assert alice["signal_counts"]["agreement"] == 2
+
+
+def test_meeting_speaker_update_requires_saved_terminal_meeting(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="draft-meeting",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.create_meeting(
+        meeting_id="processing-upload",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+        status=MeetingHistoryStatus.PROCESSING,
+        source_type=MeetingSourceType.UPLOAD,
+    )
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        draft_response = client.patch(
+            "/api/meetings/draft-meeting/speakers",
+            json={"speaker_updates": [{"from": "Speaker 1", "to": "Alice"}]},
+        )
+        processing_response = client.patch(
+            "/api/meetings/processing-upload/speakers",
+            json={"speaker_updates": [{"from": "Speaker 1", "to": "Alice"}]},
+        )
+        missing_response = client.patch(
+            "/api/meetings/missing/speakers",
+            json={"speaker_updates": [{"from": "Speaker 1", "to": "Alice"}]},
+        )
+
+    assert draft_response.status_code == 409
+    assert processing_response.status_code == 409
+    assert missing_response.status_code == 404
+
+
+def test_meeting_speaker_update_requires_matching_labels(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="final-meeting",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.upsert_transcript(
+        "final-meeting",
+        TranscriptItem(
+            transcript_index=0,
+            speaker="Speaker 1",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="Hello.",
+            start=0.0,
+            end=1.0,
+        ),
+    )
+    history_service.mark_finalized("final-meeting")
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/meetings/final-meeting/speakers",
+            json={"speaker_updates": [{"from": "Speaker 2", "to": "Alice"}]},
+        )
+
+    assert response.status_code == 409
+
+
+def test_meeting_speaker_update_applies_mapping_without_cascading(tmp_path) -> None:
+    history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    history_service.create_meeting(
+        meeting_id="chain-meeting",
+        scene="general",
+        target_lang="en",
+        provider="dashscope",
+    )
+    history_service.upsert_transcript(
+        "chain-meeting",
+        TranscriptItem(
+            transcript_index=0,
+            speaker="Speaker 1",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="First speaker.",
+            start=0.0,
+            end=1.0,
+        ),
+    )
+    history_service.upsert_transcript(
+        "chain-meeting",
+        TranscriptItem(
+            transcript_index=1,
+            speaker="Speaker 2",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="Second speaker.",
+            start=1.0,
+            end=2.0,
+        ),
+    )
+    history_service.mark_finalized("chain-meeting")
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.state.meeting_history_service = history_service
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/meetings/chain-meeting/speakers",
+            json={
+                "speaker_updates": [
+                    {"from": "Speaker 1", "to": "Speaker 2"},
+                    {"from": "Speaker 2", "to": "Bob"},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert [item["speaker"] for item in response.json()["transcripts"]] == ["Speaker 2", "Bob"]
 
 
 def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_uploads(tmp_path) -> None:

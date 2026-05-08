@@ -43,6 +43,11 @@ export interface GlossaryTermUpdate {
   note?: string | null
 }
 
+export interface SpeakerLabelUpdate {
+  from: string
+  to: string
+}
+
 export type TranslationTargetLanguage =
   | 'en'
   | 'es'

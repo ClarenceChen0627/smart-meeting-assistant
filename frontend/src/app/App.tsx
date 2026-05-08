@@ -27,6 +27,7 @@ import type {
   MeetingSourceType,
   MeetingSummary,
   MeetingSummaryUpdate,
+  SpeakerLabelUpdate,
   TranscriptItem,
   TranslationTargetLanguage,
 } from '../types';
@@ -189,6 +190,7 @@ export default function App() {
   const [loadingMeetingId, setLoadingMeetingId] = useState<string | null>(null);
   const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
   const [isSavingSummary, setIsSavingSummary] = useState(false);
+  const [isSavingSpeakers, setIsSavingSpeakers] = useState(false);
 
   const [statusMessage, setStatusMessage] = useState('Ready to start meeting');
   const [serverError, setServerError] = useState('');
@@ -752,6 +754,61 @@ export default function App() {
     }
   };
 
+  const handleSpeakerSave = async (meetingId: string, speakerUpdates: SpeakerLabelUpdate[]) => {
+    try {
+      setIsSavingSpeakers(true);
+      setServerError('');
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/speakers`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ speaker_updates: speakerUpdates }),
+      });
+
+      if (!response.ok) {
+        let detail = `Failed to update speakers (${response.status})`;
+        try {
+          const payload = await response.json() as { detail?: string };
+          if (payload.detail) {
+            detail = payload.detail;
+          }
+        } catch {
+          // ignore response parse failures
+        }
+        throw new Error(detail);
+      }
+
+      const payload = await response.json() as MeetingRecord;
+      updateHistoryFromMeeting(payload);
+
+      if (historyMeeting?.meeting_id === payload.meeting_id) {
+        setHistoryMeeting(payload);
+      }
+
+      if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
+        setActiveUploadMeeting(payload);
+      }
+
+      if (currentMeetingId === payload.meeting_id) {
+        setTranscripts(
+          decorateTranscriptsWithAnalysis(
+            payload.transcripts.map((item) => toDisplayTranscript(item, 'live')),
+            payload.analysis
+          )
+        );
+        setSummary(payload.summary);
+        setAnalysis(payload.analysis);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update speakers';
+      setServerError(message);
+      throw error;
+    } finally {
+      setIsSavingSpeakers(false);
+    }
+  };
+
   const displayedMeeting = historyMeeting ?? (inputMode === 'upload' ? activeUploadMeeting : null);
   const isHistoryView = historyMeeting !== null;
   const isUploadCurrentView = !isHistoryView && inputMode === 'upload';
@@ -773,6 +830,21 @@ export default function App() {
   const selectedMeetingId = historyMeeting?.meeting_id
     ?? (inputMode === 'upload' ? activeUploadMeeting?.meeting_id ?? null : currentMeetingId);
   const summaryMeetingId = displayedMeeting?.meeting_id ?? currentMeetingId;
+  const speakerMeetingId = displayedMeeting?.meeting_id ?? (
+    !isRecording && !isStarting && !isFinalizing ? currentMeetingId : null
+  );
+  const canEditSpeakers = Boolean(
+    speakerMeetingId
+    && !isRecording
+    && !isStarting
+    && !isFinalizing
+    && !isUploadingFile
+    && (
+      displayedMeeting
+        ? displayedMeeting.status === 'finalized' || displayedMeeting.status === 'failed'
+        : Boolean(currentMeetingId && summary)
+    )
+  );
   const canRetryUpload = Boolean(
     retryUploadFile && (lastUploadFailed || activeUploadMeeting?.status === 'failed')
   );
@@ -1079,6 +1151,14 @@ export default function App() {
                     : undefined
               }
               showLiveBadge={inputMode === 'live' && !isHistoryView}
+              canEditSpeakers={canEditSpeakers}
+              isSavingSpeakers={isSavingSpeakers}
+              onSaveSpeakerUpdates={
+                speakerMeetingId
+                  ? (updates) => handleSpeakerSave(speakerMeetingId, updates)
+                  : undefined
+              }
+              onSpeakerSaveError={setServerError}
             />
           )}
           {activeTab === 'summary' && (

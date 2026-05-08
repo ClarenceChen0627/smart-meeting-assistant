@@ -1,5 +1,6 @@
-import { User, Clock, Mic } from 'lucide-react';
-import type { TranslationTargetLanguage } from '../../types';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Clock, Mic, Pencil, User, X } from 'lucide-react';
+import type { SpeakerLabelUpdate, TranslationTargetLanguage } from '../../types';
 
 interface DisplayTranscriptItem {
   id: string; // for React key
@@ -25,6 +26,10 @@ interface TranscriptPanelProps {
   description?: string;
   emptyMessage?: string;
   showLiveBadge?: boolean;
+  canEditSpeakers?: boolean;
+  isSavingSpeakers?: boolean;
+  onSaveSpeakerUpdates?: (updates: SpeakerLabelUpdate[]) => Promise<void> | void;
+  onSpeakerSaveError?: (message: string) => void;
 }
 
 const formatTime = (seconds: number): string => {
@@ -60,6 +65,8 @@ const getSpeakerColor = (speaker: string) => {
   return speakerColorCache[speaker];
 };
 
+const normalizeSpeakerLabel = (value: string) => value.replace(/\s+/g, ' ').trim();
+
 export function TranscriptPanel({
   isRecording,
   currentLanguage,
@@ -68,17 +75,80 @@ export function TranscriptPanel({
   description = 'Real-time speech-to-text with speaker identification',
   emptyMessage = 'Click "Start Recording" to begin transcription',
   showLiveBadge = true,
+  canEditSpeakers = false,
+  isSavingSpeakers = false,
+  onSaveSpeakerUpdates,
+  onSpeakerSaveError,
 }: TranscriptPanelProps) {
+  const [isEditingSpeakers, setIsEditingSpeakers] = useState(false);
+  const [speakerDrafts, setSpeakerDrafts] = useState<Record<string, string>>({});
+  const [speakerError, setSpeakerError] = useState<string | null>(null);
   // Always show translation if available, regardless of whether it is 'en'
   const showTranslation = true;
   
   // Calculate unique speakers for stats
   const safeTranscripts = transcripts || [];
-  const uniqueSpeakers = new Set(
-    safeTranscripts
-      .filter((t) => t.speaker_is_final && t.speaker !== 'Unknown')
-      .map((t) => t.speaker)
-  ).size;
+  const finalSpeakerLabels = useMemo(
+    () => Array.from(new Set(
+      safeTranscripts
+        .filter((t) => t.speaker_is_final && t.speaker !== 'Unknown')
+        .map((t) => t.speaker)
+    )).sort((left, right) => left.localeCompare(right)),
+    [safeTranscripts]
+  );
+  const uniqueSpeakers = finalSpeakerLabels.length;
+  const canShowSpeakerEditor = canEditSpeakers && finalSpeakerLabels.length > 0 && onSaveSpeakerUpdates;
+
+  useEffect(() => {
+    if (!isEditingSpeakers) {
+      setSpeakerDrafts(Object.fromEntries(finalSpeakerLabels.map((speaker) => [speaker, speaker])));
+      setSpeakerError(null);
+    }
+  }, [finalSpeakerLabels, isEditingSpeakers]);
+
+  const startSpeakerEditing = () => {
+    setSpeakerDrafts(Object.fromEntries(finalSpeakerLabels.map((speaker) => [speaker, speaker])));
+    setSpeakerError(null);
+    setIsEditingSpeakers(true);
+  };
+
+  const cancelSpeakerEditing = () => {
+    setSpeakerDrafts(Object.fromEntries(finalSpeakerLabels.map((speaker) => [speaker, speaker])));
+    setSpeakerError(null);
+    setIsEditingSpeakers(false);
+  };
+
+  const saveSpeakerUpdates = async () => {
+    if (!onSaveSpeakerUpdates) {
+      return;
+    }
+    const updates = finalSpeakerLabels
+      .map((speaker) => ({
+        from: speaker,
+        to: normalizeSpeakerLabel(speakerDrafts[speaker] ?? speaker),
+      }))
+      .filter((update) => update.from !== update.to);
+
+    if (updates.some((update) => !update.to)) {
+      setSpeakerError('Speaker names cannot be empty.');
+      return;
+    }
+    if (updates.length === 0) {
+      setIsEditingSpeakers(false);
+      setSpeakerError(null);
+      return;
+    }
+
+    try {
+      setSpeakerError(null);
+      await onSaveSpeakerUpdates(updates);
+      setIsEditingSpeakers(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update speakers.';
+      setSpeakerError(message);
+      onSpeakerSaveError?.(message);
+    }
+  };
 
   return (
     <div className="bg-white rounded-lg border border-gray-200">
@@ -92,6 +162,16 @@ export function TranscriptPanel({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {canShowSpeakerEditor && !isEditingSpeakers && (
+              <button
+                type="button"
+                onClick={startSpeakerEditing}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+              >
+                <Pencil className="h-4 w-4" />
+                <span>Edit speakers</span>
+              </button>
+            )}
             {showLiveBadge && isRecording && (
               <div className="flex items-center gap-2 text-red-600">
                 <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" />
@@ -100,6 +180,54 @@ export function TranscriptPanel({
             )}
           </div>
         </div>
+        {isEditingSpeakers && (
+          <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {finalSpeakerLabels.map((speaker) => (
+                <label key={speaker} className="block text-xs text-gray-500">
+                  <span className="mb-1 block truncate">{speaker}</span>
+                  <input
+                    value={speakerDrafts[speaker] ?? speaker}
+                    disabled={isSavingSpeakers}
+                    onChange={(event) => {
+                      setSpeakerDrafts((drafts) => ({
+                        ...drafts,
+                        [speaker]: event.target.value,
+                      }));
+                    }}
+                    className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={`Speaker label for ${speaker}`}
+                  />
+                </label>
+              ))}
+            </div>
+            {speakerError && (
+              <p className="mt-2 text-xs text-red-600">{speakerError}</p>
+            )}
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelSpeakerEditing}
+                disabled={isSavingSpeakers}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+                <span>Cancel</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void saveSpeakerUpdates();
+                }}
+                disabled={isSavingSpeakers}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check className="h-4 w-4" />
+                <span>{isSavingSpeakers ? 'Saving...' : 'Save speakers'}</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Transcript Content */}
