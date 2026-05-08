@@ -1,4 +1,4 @@
-import { CheckCircle2, FileText, Plus, Save, Target, Trash2, TrendingUp, X } from 'lucide-react';
+import { CheckCircle2, Download, FileText, Plus, Save, Target, Trash2, TrendingUp, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type {
   ActionItem,
@@ -7,12 +7,14 @@ import type {
   MeetingSummaryUpdate,
   TranscriptItem,
 } from '../../types';
+import { downloadMeetingNotesMarkdown } from '../meetingNotesExport';
 
 interface SummaryPanelProps {
   summary: MeetingSummary | null;
   transcripts?: TranscriptItem[];
   meetingDate?: string | null;
   meetingId?: string | null;
+  meetingTitle?: string | null;
   isSaving?: boolean;
   onSaveSummary?: (meetingId: string, summary: MeetingSummaryUpdate) => Promise<void> | void;
   onSaveError?: (message: string) => void;
@@ -257,6 +259,7 @@ export function SummaryPanel({
   transcripts = [],
   meetingDate,
   meetingId,
+  meetingTitle,
   isSaving = false,
   onSaveSummary,
   onSaveError,
@@ -419,11 +422,28 @@ export function SummaryPanel({
   const displayedTopics = summary.key_topics.length ? summary.key_topics : ['No key topics extracted.'];
   const displayedDecisions = summary.decisions.length ? summary.decisions : ['No decisions extracted.'];
   const displayedRisks = summary.risks.length ? summary.risks : [];
+  const exportNotes = () => {
+    downloadMeetingNotesMarkdown({
+      summary,
+      transcripts,
+      meetingDate,
+      meetingId,
+      meetingTitle,
+    });
+  };
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {canEdit && (
-        <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={exportNotes}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Download className="h-4 w-4" />
+          <span>Export Notes</span>
+        </button>
+        {canEdit && (
           <button
             type="button"
             onClick={startEditing}
@@ -432,8 +452,8 @@ export function SummaryPanel({
             <FileText className="h-4 w-4" />
             <span>Edit Summary</span>
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-start gap-3 mb-4">

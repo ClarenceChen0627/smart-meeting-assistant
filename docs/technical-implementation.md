@@ -91,7 +91,7 @@ The product upload path is `POST /api/meetings/upload`.
 7. Translation, analysis, and summary are generated and persisted.
 8. The meeting is marked `finalized` on success or `failed` on unrecoverable errors.
 
-The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, analysis, summary, and action items in the same workspace used by live meetings.
+The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, analysis, summary, and action items in the same workspace used by live meetings. Runtime ASR, analysis, and summary failures are retried once before the upload is marked failed. The frontend keeps the selected file in memory during the current page session so failed uploads can be submitted again without storing raw audio in meeting history.
 
 ## 7. Meeting History
 
@@ -109,6 +109,8 @@ The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, anal
 - action item status/content updates
 
 The history APIs support list, detail, title update, summary update, action item status update, and deletion.
+
+Meeting notes can be exported from the summary panel as a Markdown file. The export is generated in the frontend from the displayed summary, meeting date, duration, risks, decisions, action items, and transcript references; no backend export endpoint is required.
 
 ## 8. Frontend State Model
 
@@ -147,7 +149,7 @@ Backend tests use pytest and must run through `backend/.venv`. Existing coverage
 - history persistence and migration
 - demo provider health, WebSocket, upload, and disabled-mode behavior
 
-The frontend currently has a lightweight Node-based test for upload status messaging and continues to rely on `npm run build` as the primary UI verification step.
+The frontend uses Vitest with React Testing Library for interaction coverage. Current frontend tests cover upload status messaging, ASR provider options, upload control state, summary editing, Markdown meeting notes export, and export formatting. `npm run build` remains the primary bundle verification step.
 
 The Windows-first CI workflow installs backend and frontend dependencies, runs backend pytest, runs frontend tests, and builds the Vite frontend.
 
@@ -171,5 +173,6 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 - Translation supports one target language per meeting.
 - Raw audio is not stored in meeting history.
 - Upload processing is async but still in-process; there is no distributed worker queue.
+- Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.

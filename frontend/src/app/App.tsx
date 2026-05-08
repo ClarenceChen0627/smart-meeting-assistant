@@ -152,6 +152,8 @@ export default function App() {
   const [currentProvider, setCurrentProvider] = useState<ASRProvider>('volcengine');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
   const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
+  const [retryUploadFile, setRetryUploadFile] = useState<File | null>(null);
+  const [lastUploadFailed, setLastUploadFailed] = useState(false);
   const [uploadInputKey, setUploadInputKey] = useState(0);
 
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
@@ -334,6 +336,15 @@ export default function App() {
     setHistoryMeeting(null);
   };
 
+  const handleUploadFileChange = (file: File | null) => {
+    setSelectedUploadFile(file);
+    setRetryUploadFile(file);
+    setLastUploadFailed(false);
+    if (file) {
+      setServerError('');
+    }
+  };
+
   const handleStartRecording = async () => {
     try {
       setIsStarting(true);
@@ -390,19 +401,23 @@ export default function App() {
   };
 
   const handleUploadMeeting = async () => {
-    if (!selectedUploadFile) {
+    const uploadFile = selectedUploadFile ?? retryUploadFile;
+    if (!uploadFile) {
       setServerError('Please select an audio file to upload.');
+      setLastUploadFailed(true);
       return;
     }
 
     try {
       setIsUploadingFile(true);
       setServerError('');
+      setLastUploadFailed(false);
       setHistoryMeeting(null);
+      setActiveUploadMeeting(null);
       setActiveTab('transcript');
 
       const formData = new FormData();
-      formData.append('file', selectedUploadFile);
+      formData.append('file', uploadFile);
       formData.append('scene', currentScene);
       formData.append('target_lang', currentLanguage);
       formData.append('provider', currentProvider);
@@ -427,9 +442,12 @@ export default function App() {
       const payload = await response.json() as MeetingRecord;
       setActiveUploadMeeting(payload);
       updateHistoryFromMeeting(payload);
+      setRetryUploadFile(uploadFile);
       setSelectedUploadFile(null);
       setUploadInputKey((prev) => prev + 1);
     } catch (error) {
+      setRetryUploadFile(uploadFile);
+      setLastUploadFailed(true);
       setServerError(error instanceof Error ? error.message : 'Failed to upload meeting audio');
     } finally {
       setIsUploadingFile(false);
@@ -626,11 +644,16 @@ export default function App() {
   const displayedAnalysis = displayedMeeting?.analysis ?? (displayedMeeting ? null : analysis);
   const displayedLanguage = displayedMeeting?.target_lang ?? currentLanguage;
   const displayedMeetingDate = displayedMeeting?.created_at ?? null;
+  const displayedMeetingTitle = displayedMeeting?.title ?? null;
   const canOpenHistory = !isRecording && !isStarting && !isFinalizing;
   const canSwitchInputMode = !isRecording && !isStarting && !isFinalizing;
   const selectedMeetingId = historyMeeting?.meeting_id
     ?? (inputMode === 'upload' ? activeUploadMeeting?.meeting_id ?? null : currentMeetingId);
   const summaryMeetingId = displayedMeeting?.meeting_id ?? currentMeetingId;
+  const canRetryUpload = Boolean(
+    retryUploadFile && (lastUploadFailed || activeUploadMeeting?.status === 'failed')
+  );
+  const uploadControlFileName = selectedUploadFile?.name ?? (canRetryUpload ? retryUploadFile?.name ?? null : null);
 
   const displayStatusMessage = isHistoryView
     ? `Viewing saved ${sourceLabels[historyMeeting.source_type]} meeting record`
@@ -763,10 +786,11 @@ export default function App() {
             ) : (
               <UploadMeetingControls
                 inputKey={uploadInputKey}
-                selectedFileName={selectedUploadFile?.name ?? null}
+                selectedFileName={uploadControlFileName}
                 isUploading={isUploadingFile}
                 disabled={isRecording || isStarting || isFinalizing}
-                onFileChange={setSelectedUploadFile}
+                isRetryAvailable={canRetryUpload}
+                onFileChange={handleUploadFileChange}
                 onUpload={() => {
                   void handleUploadMeeting();
                 }}
@@ -924,6 +948,7 @@ export default function App() {
               transcripts={displayedTranscripts}
               meetingDate={displayedMeetingDate}
               meetingId={summaryMeetingId}
+              meetingTitle={displayedMeetingTitle}
               isSaving={isSavingSummary}
               onSaveSummary={(meetingId, nextSummary) => handleSummarySave(meetingId, nextSummary)}
               onSaveError={setServerError}

@@ -183,7 +183,7 @@ docker-compose up --build
 ## Roadmap
 
 - 短期：demo smoke tests 已单独接入 CI，README 已补充 demo UI 截图入口。
-- 中期：增加前端交互测试、会议纪要导出、上传失败重试和错误恢复。
+- 中期：Vitest 前端交互测试、Markdown 会议纪要导出、上传失败重试和错误恢复已实现。
 - 长期：引入后台 worker、可选原始音频留存、参与者级分析和自定义术语表。
 
 ## License

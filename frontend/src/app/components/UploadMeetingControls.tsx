@@ -1,4 +1,4 @@
-import { FileAudio, Loader2, Upload } from 'lucide-react';
+import { FileAudio, Loader2, RefreshCw, Upload } from 'lucide-react';
 
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -8,6 +8,7 @@ interface UploadMeetingControlsProps {
   selectedFileName: string | null;
   isUploading: boolean;
   disabled: boolean;
+  isRetryAvailable?: boolean;
   onFileChange: (file: File | null) => void;
   onUpload: () => void;
 }
@@ -17,9 +18,12 @@ export function UploadMeetingControls({
   selectedFileName,
   isUploading,
   disabled,
+  isRetryAvailable = false,
   onFileChange,
   onUpload,
 }: UploadMeetingControlsProps) {
+  const canSubmit = Boolean(selectedFileName || isRetryAvailable);
+
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3 sm:min-w-[380px]">
       <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -30,6 +34,7 @@ export function UploadMeetingControls({
         <Input
           key={inputKey}
           type="file"
+          aria-label="Select one meeting audio file"
           accept="audio/*,.wav,.mp3,.ogg,.opus,.m4a,.webm"
           disabled={disabled || isUploading}
           onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
@@ -38,13 +43,18 @@ export function UploadMeetingControls({
         <Button
           type="button"
           onClick={onUpload}
-          disabled={disabled || isUploading || !selectedFileName}
+          disabled={disabled || isUploading || !canSubmit}
           className="sm:min-w-[160px]"
         >
           {isUploading ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>Uploading...</span>
+            </>
+          ) : isRetryAvailable ? (
+            <>
+              <RefreshCw className="h-4 w-4" />
+              <span>Retry Upload</span>
             </>
           ) : (
             <>

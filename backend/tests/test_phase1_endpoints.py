@@ -38,6 +38,19 @@ class FailingAudioCodecService:
         raise RuntimeError("Audio conversion failed in test")
 
 
+class CountingFailingAudioCodecService(FailingAudioCodecService):
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def convert_upload_to_wav(self, audio_data: bytes, *, filename: str | None, content_type: str | None) -> bytes:
+        self.call_count += 1
+        return await super().convert_upload_to_wav(
+            audio_data,
+            filename=filename,
+            content_type=content_type,
+        )
+
+
 class StubASRClient:
     def __init__(self, provider_name: str, segments: list[TranscriptSegment], *, is_configured: bool = True) -> None:
         self.provider_name = provider_name
@@ -80,6 +93,26 @@ class StubASRStream:
 class FailingASRClient(StubASRClient):
     async def transcribe_wav(self, audio_data: bytes) -> list[TranscriptSegment]:
         raise RuntimeError("ASR failed in test")
+
+
+class FlakyASRClient(StubASRClient):
+    def __init__(
+        self,
+        provider_name: str,
+        segments: list[TranscriptSegment],
+        *,
+        failures_before_success: int = 1,
+        is_configured: bool = True,
+    ) -> None:
+        super().__init__(provider_name, segments, is_configured=is_configured)
+        self.failures_before_success = failures_before_success
+        self.call_count = 0
+
+    async def transcribe_wav(self, audio_data: bytes) -> list[TranscriptSegment]:
+        self.call_count += 1
+        if self.call_count <= self.failures_before_success:
+            raise RuntimeError("Transient ASR failure in test")
+        return await super().transcribe_wav(audio_data)
 
 
 class StubTranslationService:
@@ -161,9 +194,33 @@ class SlowSummaryService(StubSummaryService):
         return await super().generate_summary(transcripts, scene)
 
 
+class FlakySummaryService(StubSummaryService):
+    def __init__(self, *, failures_before_success: int = 1) -> None:
+        self.failures_before_success = failures_before_success
+        self.call_count = 0
+
+    async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
+        self.call_count += 1
+        if self.call_count <= self.failures_before_success:
+            raise RuntimeError("Transient summary failure in test")
+        return await super().generate_summary(transcripts, scene)
+
+
 class SlowMeetingAnalysisService(IncrementingMeetingAnalysisService):
     async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
         await asyncio.sleep(0.05)
+        return await super().analyze_meeting(transcripts, scene)
+
+
+class FlakyMeetingAnalysisService(StubMeetingAnalysisService):
+    def __init__(self, *, failures_before_success: int = 1) -> None:
+        self.failures_before_success = failures_before_success
+        self.call_count = 0
+
+    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+        self.call_count += 1
+        if self.call_count <= self.failures_before_success:
+            raise RuntimeError("Transient analysis failure in test")
         return await super().analyze_meeting(transcripts, scene)
 
 
@@ -920,6 +977,173 @@ def test_upload_failure_marks_record_failed_and_keeps_error_message(tmp_path) ->
     assert failed_payload["summary"] is None
     assert failed_payload["analysis"] is None
     assert failed_payload["error_message"] == "ASR failed in test"
+
+
+def test_upload_transient_asr_runtime_error_retries_and_finalizes(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = FlakyASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.wav", b"fake-audio", "audio/wav"),
+                "scene": (None, "general"),
+                "target_lang": (None, "en"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        finalized_payload = wait_for_meeting_status(client, response.json()["meeting_id"], "finalized")
+
+    assert dashscope_client.call_count == 2
+    assert finalized_payload["summary"]["overview"].startswith("The team reviewed")
+
+
+def test_upload_transient_analysis_and_summary_errors_retry_and_finalize(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    analysis_service = FlakyMeetingAnalysisService()
+    summary_service = FlakySummaryService()
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        meeting_analysis_service=analysis_service,
+        summary_service=summary_service,
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.wav", b"fake-audio", "audio/wav"),
+                "scene": (None, "general"),
+                "target_lang": (None, "en"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        finalized_payload = wait_for_meeting_status(client, response.json()["meeting_id"], "finalized")
+
+    assert analysis_service.call_count == 2
+    assert summary_service.call_count == 2
+    assert finalized_payload["status"] == "finalized"
+    assert finalized_payload["summary"]["title"] == "Meeting plan follow-up"
+
+
+def test_upload_runtime_error_marks_failed_after_retry_limit(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    summary_service = FlakySummaryService(failures_before_success=2)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        summary_service=summary_service,
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.wav", b"fake-audio", "audio/wav"),
+                "scene": (None, "general"),
+                "target_lang": (None, "en"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        failed_payload = wait_for_meeting_status(client, response.json()["meeting_id"], "failed")
+
+    assert summary_service.call_count == 2
+    assert failed_payload["summary"] is None
+    assert failed_payload["error_message"] == "Transient summary failure in test"
+
+
+def test_upload_audio_conversion_failure_is_not_retried(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", build_segments(), is_configured=False)
+    audio_codec_service = CountingFailingAudioCodecService()
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        audio_codec_service=audio_codec_service,
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            files={
+                "file": ("meeting.mp3", b"fake-audio", "audio/mpeg"),
+                "scene": (None, "general"),
+                "target_lang": (None, "en"),
+                "provider": (None, "dashscope"),
+            },
+        )
+
+        assert response.status_code == 202
+        failed_payload = wait_for_meeting_status(client, response.json()["meeting_id"], "failed")
+
+    assert audio_codec_service.call_count == 1
+    assert failed_payload["error_message"] == "Audio conversion failed in test"
 
 
 def test_meeting_action_item_status_update_is_persisted(tmp_path) -> None:
