@@ -65,12 +65,23 @@ export interface MeetingAnalysisHighlight {
   reason: string
 }
 
+export interface ParticipantAnalysis {
+  speaker: string
+  transcript_count: number
+  speaking_time_seconds: number
+  signal_counts: MeetingSignalCounts
+  sentiment: MeetingSentimentLevel
+  engagement_level: MeetingEngagementLevel
+  engagement_summary: string
+}
+
 export interface MeetingAnalysis {
   overall_sentiment: MeetingSentimentLevel
   engagement_level: MeetingEngagementLevel
   engagement_summary: string
   signal_counts: MeetingSignalCounts
   highlights: MeetingAnalysisHighlight[]
+  participants: ParticipantAnalysis[]
 }
 
 export interface MeetingSummary {
@@ -127,6 +138,10 @@ export interface MeetingHistoryListItem {
   processing_stage: MeetingProcessingStage | null
   error_message: string | null
   source_name: string | null
+  raw_audio_retained: boolean
+  raw_audio_filename: string | null
+  raw_audio_content_type: string | null
+  raw_audio_size_bytes: number | null
 }
 
 export interface MeetingRecord extends MeetingHistoryListItem {

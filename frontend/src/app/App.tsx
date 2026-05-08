@@ -52,9 +52,17 @@ const buildApiBaseUrl = () => {
   return 'http://localhost:8080';
 };
 
-const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider) => {
+const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider, glossaryTerms: string) => {
   const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || 'ws://localhost:8080';
-  return `${baseUrl.replace(/\/+$/, '')}/ws/meeting?scene=${scene}&target_lang=${targetLang}&provider=${provider}`;
+  const params = new URLSearchParams({
+    scene,
+    target_lang: targetLang,
+    provider,
+  });
+  if (glossaryTerms.trim()) {
+    params.set('glossary_terms', glossaryTerms.trim());
+  }
+  return `${baseUrl.replace(/\/+$/, '')}/ws/meeting?${params.toString()}`;
 };
 
 const sourceLabels: Record<MeetingSourceType, string> = {
@@ -117,6 +125,10 @@ const toHistoryListItem = (meeting: MeetingRecord): MeetingHistoryListItem => ({
   processing_stage: meeting.processing_stage,
   error_message: meeting.error_message,
   source_name: meeting.source_name,
+  raw_audio_retained: meeting.raw_audio_retained,
+  raw_audio_filename: meeting.raw_audio_filename,
+  raw_audio_content_type: meeting.raw_audio_content_type,
+  raw_audio_size_bytes: meeting.raw_audio_size_bytes,
 });
 
 const mergeMeetingIntoHistoryList = (
@@ -155,6 +167,8 @@ export default function App() {
   const [retryUploadFile, setRetryUploadFile] = useState<File | null>(null);
   const [lastUploadFailed, setLastUploadFailed] = useState(false);
   const [uploadInputKey, setUploadInputKey] = useState(0);
+  const [retainRawAudio, setRetainRawAudio] = useState(false);
+  const [glossaryTerms, setGlossaryTerms] = useState('');
 
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
@@ -354,7 +368,7 @@ export default function App() {
       setActiveTab('transcript');
       resetLiveSessionState();
 
-      await connect(buildWebSocketUrl(currentScene, currentLanguage, currentProvider));
+      await connect(buildWebSocketUrl(currentScene, currentLanguage, currentProvider, glossaryTerms));
       await startAudio();
 
       setIsRecording(true);
@@ -421,6 +435,10 @@ export default function App() {
       formData.append('scene', currentScene);
       formData.append('target_lang', currentLanguage);
       formData.append('provider', currentProvider);
+      formData.append('retain_raw_audio', retainRawAudio ? 'true' : 'false');
+      if (glossaryTerms.trim()) {
+        formData.append('glossary_terms', glossaryTerms.trim());
+      }
 
       const response = await fetch(`${buildApiBaseUrl()}/api/meetings/upload`, {
         method: 'POST',
@@ -790,6 +808,10 @@ export default function App() {
                 isUploading={isUploadingFile}
                 disabled={isRecording || isStarting || isFinalizing}
                 isRetryAvailable={canRetryUpload}
+                retainRawAudio={retainRawAudio}
+                glossaryTerms={glossaryTerms}
+                onRetainRawAudioChange={setRetainRawAudio}
+                onGlossaryTermsChange={setGlossaryTerms}
                 onFileChange={handleUploadFileChange}
                 onUpload={() => {
                   void handleUploadMeeting();
@@ -901,6 +923,9 @@ export default function App() {
                 {activeUploadMeeting.source_name
                   ? `File: ${activeUploadMeeting.source_name}`
                   : 'Uploaded meeting record'}
+                {activeUploadMeeting.raw_audio_retained && activeUploadMeeting.raw_audio_filename
+                  ? ` - retained audio: ${activeUploadMeeting.raw_audio_filename}`
+                  : ''}
               </p>
               {activeUploadMeeting.processing_stage && (
                 <p className="text-xs text-blue-700 mt-1">{processingStageLabels[activeUploadMeeting.processing_stage]}</p>

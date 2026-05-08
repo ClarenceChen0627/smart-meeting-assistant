@@ -13,10 +13,12 @@ from app.schemas.meeting_history import (
     MeetingProcessingStage,
     MeetingRecord,
     MeetingSourceType,
+    RawAudioMetadata,
 )
 from app.schemas.summary import ActionItemStatus, MeetingSummary, SummaryUpdate
 from app.schemas.transcript import TranscriptItem
 from app.schemas.translation import TranscriptTranslation
+from app.schemas.glossary import GlossaryTerm
 
 
 def _utc_now_iso() -> str:
@@ -44,6 +46,7 @@ class MeetingHistoryService:
         processing_stage: MeetingProcessingStage | None = None,
         error_message: str | None = None,
         source_name: str | None = None,
+        glossary_terms: list[GlossaryTerm] | None = None,
     ) -> str:
         timestamp = _utc_now_iso()
         with self._connect() as connection:
@@ -66,9 +69,15 @@ class MeetingHistoryService:
                     processing_stage,
                     error_message,
                     source_name,
+                    raw_audio_retained,
+                    raw_audio_path,
+                    raw_audio_filename,
+                    raw_audio_content_type,
+                    raw_audio_size_bytes,
+                    glossary_terms_json,
                     summary_json,
                     analysis_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, 0, '', ?, ?, ?, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, 0, '', ?, ?, ?, 0, NULL, NULL, NULL, NULL, ?, NULL, NULL)
                 """,
                 (
                     meeting_id,
@@ -82,9 +91,35 @@ class MeetingHistoryService:
                     processing_stage.value if processing_stage else None,
                     error_message,
                     source_name,
+                    self._dump_glossary_terms(glossary_terms or []),
                 ),
             )
         return timestamp
+
+    def update_raw_audio_metadata(self, meeting_id: str, metadata: RawAudioMetadata) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE meetings
+                SET
+                    raw_audio_retained = ?,
+                    raw_audio_path = ?,
+                    raw_audio_filename = ?,
+                    raw_audio_content_type = ?,
+                    raw_audio_size_bytes = ?,
+                    updated_at = ?
+                WHERE meeting_id = ?
+                """,
+                (
+                    int(metadata.raw_audio_retained),
+                    metadata.raw_audio_path,
+                    metadata.raw_audio_filename,
+                    metadata.raw_audio_content_type,
+                    metadata.raw_audio_size_bytes,
+                    _utc_now_iso(),
+                    meeting_id,
+                ),
+            )
 
     def upsert_transcript(self, meeting_id: str, transcript: TranscriptItem) -> None:
         preview_text = self._build_preview_text(transcript.text)
@@ -410,7 +445,11 @@ class MeetingHistoryService:
                     preview_text,
                     processing_stage,
                     error_message,
-                    source_name
+                    source_name,
+                    raw_audio_retained,
+                    raw_audio_filename,
+                    raw_audio_content_type,
+                    raw_audio_size_bytes
                 FROM meetings
                 ORDER BY updated_at DESC, created_at DESC
                 """
@@ -438,6 +477,12 @@ class MeetingHistoryService:
                     processing_stage,
                     error_message,
                     source_name,
+                    raw_audio_retained,
+                    raw_audio_path,
+                    raw_audio_filename,
+                    raw_audio_content_type,
+                    raw_audio_size_bytes,
+                    glossary_terms_json,
                     summary_json,
                     analysis_json
                 FROM meetings
@@ -486,6 +531,11 @@ class MeetingHistoryService:
             processing_stage=meeting_row["processing_stage"],
             error_message=meeting_row["error_message"],
             source_name=meeting_row["source_name"],
+            raw_audio_retained=bool(meeting_row["raw_audio_retained"]),
+            raw_audio_filename=meeting_row["raw_audio_filename"],
+            raw_audio_content_type=meeting_row["raw_audio_content_type"],
+            raw_audio_size_bytes=meeting_row["raw_audio_size_bytes"],
+            glossary_terms=self._load_glossary_terms(meeting_row["glossary_terms_json"]),
             transcripts=[
                 MeetingHistoryTranscriptItem(
                     transcript_index=row["transcript_index"],
@@ -506,7 +556,13 @@ class MeetingHistoryService:
 
     def delete_meeting(self, meeting_id: str) -> bool:
         with self._connect() as connection:
+            row = connection.execute(
+                "SELECT raw_audio_path FROM meetings WHERE meeting_id = ?",
+                (meeting_id,),
+            ).fetchone()
             deleted = connection.execute("DELETE FROM meetings WHERE meeting_id = ?", (meeting_id,)).rowcount
+        if deleted > 0 and row is not None and row["raw_audio_path"]:
+            self._delete_retained_audio(row["raw_audio_path"])
         return deleted > 0
 
     def reconcile_processing_uploads(self) -> None:
@@ -551,6 +607,12 @@ class MeetingHistoryService:
                     processing_stage TEXT,
                     error_message TEXT,
                     source_name TEXT,
+                    raw_audio_retained INTEGER NOT NULL DEFAULT 0,
+                    raw_audio_path TEXT,
+                    raw_audio_filename TEXT,
+                    raw_audio_content_type TEXT,
+                    raw_audio_size_bytes INTEGER,
+                    glossary_terms_json TEXT,
                     summary_json TEXT,
                     analysis_json TEXT
                 )
@@ -598,6 +660,18 @@ class MeetingHistoryService:
             connection.execute(
                 "ALTER TABLE meetings ADD COLUMN summary_manually_edited INTEGER NOT NULL DEFAULT 0"
             )
+        if "raw_audio_retained" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_retained INTEGER NOT NULL DEFAULT 0")
+        if "raw_audio_path" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_path TEXT")
+        if "raw_audio_filename" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_filename TEXT")
+        if "raw_audio_content_type" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_content_type TEXT")
+        if "raw_audio_size_bytes" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_size_bytes INTEGER")
+        if "glossary_terms_json" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN glossary_terms_json TEXT")
 
         connection.execute(
             """
@@ -658,3 +732,38 @@ class MeetingHistoryService:
             if separator in normalized:
                 return normalized.split(separator, 1)[0]
         return normalized
+
+    @staticmethod
+    def _dump_glossary_terms(terms: list[GlossaryTerm]) -> str | None:
+        if not terms:
+            return None
+        return json.dumps([term.model_dump() for term in terms])
+
+    @staticmethod
+    def _load_glossary_terms(value: str | None) -> list[GlossaryTerm]:
+        if not value:
+            return []
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        terms: list[GlossaryTerm] = []
+        for item in payload:
+            try:
+                terms.append(GlossaryTerm.model_validate(item))
+            except Exception:
+                continue
+        return terms
+
+    @staticmethod
+    def _delete_retained_audio(raw_audio_path: str) -> None:
+        audio_path = Path(raw_audio_path)
+        try:
+            audio_path.unlink(missing_ok=True)
+            parent = audio_path.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            return

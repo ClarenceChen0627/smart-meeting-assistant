@@ -15,6 +15,8 @@ async def upload_meeting(
     scene: str = Form("general"),
     target_lang: str | None = Form(None),
     provider: str | None = Form(None),
+    retain_raw_audio: bool = Form(False),
+    glossary_terms: str | None = Form(None),
 ) -> MeetingRecord:
     audio_data = await file.read()
     try:
@@ -25,6 +27,8 @@ async def upload_meeting(
             scene=scene,
             target_lang=target_lang,
             preferred_provider=provider,
+            retain_raw_audio=retain_raw_audio,
+            glossary_terms=glossary_terms,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

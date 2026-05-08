@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar, cast
 from uuid import uuid4
 
+from app.schemas.glossary import GlossaryTerm
 from app.schemas.meeting_history import (
     MeetingProcessingStage,
     MeetingRecord,
@@ -16,9 +17,12 @@ from app.schemas.transcript import TranscriptItem
 from app.schemas.translation import TranscriptTranslation
 from app.services.asr_provider_service import ASR_PROVIDER_DEMO, ASRProviderService
 from app.services.audio_codec_service import AudioCodecService
+from app.services.background_task_worker import BackgroundJob, BackgroundTaskWorker
 from app.services.diarization_service import DiarizationService
+from app.services.glossary_service import GlossaryService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.meeting_analysis_service import MeetingAnalysisService
+from app.services.raw_audio_retention_service import RawAudioRetentionService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
@@ -41,6 +45,9 @@ class UploadMeetingService:
         meeting_analysis_service: MeetingAnalysisService,
         translation_service: TranslationService,
         meeting_history_service: MeetingHistoryService,
+        glossary_service: GlossaryService,
+        raw_audio_retention_service: RawAudioRetentionService,
+        background_worker: BackgroundTaskWorker | None = None,
     ) -> None:
         self._asr_provider_service = asr_provider_service
         self._audio_codec_service = audio_codec_service
@@ -50,7 +57,9 @@ class UploadMeetingService:
         self._meeting_analysis_service = meeting_analysis_service
         self._translation_service = translation_service
         self._meeting_history_service = meeting_history_service
-        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._glossary_service = glossary_service
+        self._raw_audio_retention_service = raw_audio_retention_service
+        self._background_worker = background_worker or BackgroundTaskWorker(name="upload-meetings")
 
     async def start_upload(
         self,
@@ -61,12 +70,15 @@ class UploadMeetingService:
         scene: str,
         target_lang: str | None,
         preferred_provider: str | None,
+        retain_raw_audio: bool = False,
+        glossary_terms: str | None = None,
     ) -> MeetingRecord:
         if not audio_data:
             raise ValueError("Audio upload is empty.")
 
         normalized_target_lang = self._translation_service.normalize_target_lang(target_lang)
         selection = self._asr_provider_service.resolve_provider(preferred_provider)
+        resolved_glossary_terms = self._glossary_service.resolve_terms(glossary_terms)
         meeting_id = uuid4().hex
         self._meeting_history_service.create_meeting(
             meeting_id=meeting_id,
@@ -77,17 +89,31 @@ class UploadMeetingService:
             source_type=MeetingSourceType.UPLOAD,
             processing_stage=MeetingProcessingStage.TRANSCRIBING,
             source_name=filename,
+            glossary_terms=resolved_glossary_terms,
         )
+        raw_audio_metadata = self._raw_audio_retention_service.retain_upload(
+            meeting_id=meeting_id,
+            audio_data=audio_data,
+            filename=filename,
+            content_type=content_type,
+            requested=retain_raw_audio,
+        )
+        if raw_audio_metadata is not None:
+            self._meeting_history_service.update_raw_audio_metadata(meeting_id, raw_audio_metadata)
 
-        self._tasks[meeting_id] = asyncio.create_task(
-            self._process_upload(
-                meeting_id=meeting_id,
-                audio_data=audio_data,
-                filename=filename,
-                content_type=content_type,
-                scene=scene,
-                target_lang=normalized_target_lang,
-                initial_provider=selection.provider_name,
+        await self._background_worker.enqueue(
+            BackgroundJob(
+                job_id=meeting_id,
+                handler=lambda: self._process_upload(
+                    meeting_id=meeting_id,
+                    audio_data=audio_data,
+                    filename=filename,
+                    content_type=content_type,
+                    scene=scene,
+                    target_lang=normalized_target_lang,
+                    initial_provider=selection.provider_name,
+                    glossary_terms=resolved_glossary_terms,
+                ),
             )
         )
 
@@ -97,15 +123,7 @@ class UploadMeetingService:
         return meeting
 
     async def shutdown(self) -> None:
-        tasks = list(self._tasks.values())
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self._tasks.clear()
+        await self._background_worker.shutdown()
 
     async def _process_upload(
         self,
@@ -117,6 +135,7 @@ class UploadMeetingService:
         scene: str,
         target_lang: str | None,
         initial_provider: str,
+        glossary_terms: list[GlossaryTerm],
     ) -> None:
         try:
             if initial_provider == ASR_PROVIDER_DEMO:
@@ -134,6 +153,7 @@ class UploadMeetingService:
                     preferred_provider=initial_provider,
                 ),
             )
+            transcripts = self._glossary_service.apply_to_transcripts(transcripts, glossary_terms)
             if resolved_provider != initial_provider:
                 self._meeting_history_service.update_provider(meeting_id, resolved_provider)
 
@@ -155,14 +175,22 @@ class UploadMeetingService:
             self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.ANALYZING)
             analysis = await self._run_with_runtime_retries(
                 "upload analysis",
-                lambda: self._meeting_analysis_service.analyze_meeting(transcripts, scene),
+                lambda: self._meeting_analysis_service.analyze_meeting(
+                    transcripts,
+                    scene,
+                    glossary_terms=glossary_terms,
+                ),
             )
             self._meeting_history_service.update_analysis(meeting_id, analysis)
 
             self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.SUMMARIZING)
             summary = await self._run_with_runtime_retries(
                 "upload summary",
-                lambda: self._summary_service.generate_summary(transcripts, scene),
+                lambda: self._summary_service.generate_summary(
+                    transcripts,
+                    scene,
+                    glossary_terms=glossary_terms,
+                ),
             )
             self._meeting_history_service.update_summary(meeting_id, summary)
         except asyncio.CancelledError:
@@ -171,8 +199,6 @@ class UploadMeetingService:
             logger.exception("Upload meeting processing failed for %s", meeting_id)
             message = str(exc).strip() or exc.__class__.__name__
             self._meeting_history_service.mark_failed(meeting_id, message)
-        finally:
-            self._tasks.pop(meeting_id, None)
 
     async def _transcribe_audio(
         self,

@@ -72,8 +72,11 @@ Use [Configuration](docs/configuration.md) for the minimal variable matrix and d
 - Transcript translation to 10 target languages.
 - Final meeting summary with title, overview, key topics, decisions, risks, and action items.
 - Incremental and final sentiment / engagement analysis.
-- Upload meeting mode with async processing and progressive polling.
+- Upload meeting mode with background worker processing and progressive polling.
 - SQLite-backed meeting history for live and uploaded meetings.
+- Optional per-upload raw audio retention with saved meeting metadata.
+- Participant-level analysis rollups for speaker engagement and interaction signals.
+- Custom terminology glossary support for live and uploaded meetings.
 - Editable saved titles, summary fields, and action item status.
 - Optional Windows portable Electron client.
 
@@ -174,17 +177,15 @@ docker-compose up --build
 - Hybrid realtime diarization labels are provisional until final pyannote confirmation.
 - Volcengine native speaker clustering applies only to the Volcengine ASR provider path.
 - Summary is generated after `finalize`, not continuously refreshed during the meeting.
-- Realtime ASR can misrecognize technical terms.
-- Meeting analysis is meeting-level, not participant-level.
+- Realtime ASR can still misrecognize technical terms before glossary correction runs.
 - Mobile browser recording is less reliable than desktop.
-- Meeting history stores metadata, transcripts, translations, summaries, and analysis, but not raw audio files.
-- Upload processing is async but still in-process; there is no distributed worker queue yet.
+- Upload processing uses an in-process worker queue; distributed workers are still out of scope.
 
 ## Roadmap
 
 - Short term: demo smoke tests are split out for CI, and README now links to demo UI screenshots.
 - Medium term: Vitest frontend interaction tests, Markdown meeting notes export, and upload retry/error recovery are implemented.
-- Long term: introduce background workers, optional raw audio retention, participant-level analysis, and custom terminology support.
+- Long term: background workers, optional raw audio retention, participant-level analysis, and custom terminology support are implemented.
 
 ## License
 

@@ -71,9 +71,11 @@ npm run dev
 - 实时 transcript 展示与 speaker label。
 - transcript 翻译，支持 10 种目标语言。
 - finalize 后生成会议标题、概览、议题、决策、风险和行动项。
-- 会议情绪 / 参与度的增量分析和最终分析。
-- 上传会议模式，支持异步处理和前端轮询渐进展示。
+- 会议情绪 / 参与度的增量分析和最终分析，并提供参与者级汇总。
+- 上传会议模式，支持后台 worker 处理和前端轮询渐进展示。
 - SQLite 历史会议保存，覆盖 live 和 upload 两类来源。
+- 上传会议可选择保留原始音频，并在历史记录中保存音频元数据。
+- live 和 upload 均支持自定义术语表，用于术语纠错和总结 / 分析提示。
 - 已保存会议可改标题、总结字段和行动项状态。
 - 可选 Windows portable Electron 桌面客户端。
 
@@ -174,17 +176,15 @@ docker-compose up --build
 - Hybrid 实时 diarization 的 speaker label 是临时结果，finalize 后的 pyannote 结果才是最终准结果。
 - Volcengine 原生 speaker clustering 只作用于 Volcengine ASR provider 路径。
 - Summary 只在 `finalize` 后生成，不在会议中持续刷新。
-- 实时 ASR 仍可能误识别技术术语。
-- Meeting analysis 是会议级别，不是参与者级别。
+- 实时 ASR 在术语表纠错前仍可能误识别技术术语。
 - 移动端浏览器录音可靠性弱于桌面端。
-- 历史会议保存 metadata、transcript、translation、summary 和 analysis，但不保存原始音频。
-- Upload processing 当前是异步但仍在进程内执行，还没有分布式 worker queue。
+- Upload processing 使用进程内 worker queue；分布式 worker queue 仍不在当前范围内。
 
 ## Roadmap
 
 - 短期：demo smoke tests 已单独接入 CI，README 已补充 demo UI 截图入口。
 - 中期：Vitest 前端交互测试、Markdown 会议纪要导出、上传失败重试和错误恢复已实现。
-- 长期：引入后台 worker、可选原始音频留存、参与者级分析和自定义术语表。
+- 长期：后台 worker、可选原始音频留存、参与者级分析和自定义术语表已实现。
 
 ## License
 

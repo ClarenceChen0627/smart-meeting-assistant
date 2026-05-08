@@ -176,6 +176,14 @@ const buildParticipantEngagement = (
   analysis: MeetingAnalysis,
   transcripts: DisplayTranscriptItem[]
 ) => {
+  if (analysis.participants?.length) {
+    return analysis.participants.map((participant) => ({
+      name: participant.speaker,
+      engagement: engagementScores[participant.engagement_level],
+      contributions: participant.transcript_count
+    }));
+  }
+
   const speakerStats = new Map<string, { contributions: number; signals: number }>();
 
   transcripts.forEach((transcript) => {

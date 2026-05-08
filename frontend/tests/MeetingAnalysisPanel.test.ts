@@ -21,6 +21,7 @@ const analysis: MeetingAnalysis = {
       reason: 'Speaker asks for help and expects cooperation.',
     },
   ],
+  participants: [],
 };
 
 const transcripts: TranscriptItem[] = Array.from({ length: 15 }, (_, index) => ({

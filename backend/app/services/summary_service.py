@@ -7,6 +7,7 @@ import re
 from pydantic import ValidationError
 
 from app.clients.dashscope_client import DashScopeClient
+from app.schemas.glossary import GlossaryTerm
 from app.schemas.summary import ActionItem, MeetingSummary
 from app.schemas.transcript import TranscriptItem
 
@@ -82,6 +83,8 @@ class SummaryService:
         self,
         transcripts: list[TranscriptItem],
         scene: str,
+        *,
+        glossary_terms: list[GlossaryTerm] | None = None,
     ) -> MeetingSummary:
         if not transcripts:
             return MeetingSummary.empty()
@@ -90,11 +93,12 @@ class SummaryService:
             return MeetingSummary.empty()
 
         language_hint = self._detect_primary_language(transcripts)
-        user_prompt = self._build_transcript_prompt(transcripts, language_hint)
+        glossary = glossary_terms or []
+        user_prompt = self._build_transcript_prompt(transcripts, language_hint, glossary)
 
         try:
             summary = await self._request_summary(
-                system_prompt=self._build_system_prompt(scene, language_hint),
+                system_prompt=self._build_system_prompt(scene, language_hint, glossary),
                 user_prompt=user_prompt,
             )
             summary = self._augment_summary_from_transcripts(summary, transcripts)
@@ -102,7 +106,7 @@ class SummaryService:
             if self._needs_retry(summary):
                 logger.info("Summary missing overview or key topics; retrying with stronger prompt.")
                 summary = await self._request_summary(
-                    system_prompt=self._build_fallback_system_prompt(scene, language_hint),
+                    system_prompt=self._build_fallback_system_prompt(scene, language_hint, glossary),
                     user_prompt=user_prompt,
                 )
                 summary = self._augment_summary_from_transcripts(summary, transcripts)
@@ -113,7 +117,7 @@ class SummaryService:
             logger.error("Summary generation failed: %s", exc)
             return MeetingSummary.empty()
 
-    def _build_system_prompt(self, scene: str, language_hint: str) -> str:
+    def _build_system_prompt(self, scene: str, language_hint: str, glossary_terms: list[GlossaryTerm]) -> str:
         scene_prompt = {
             "finance": "You are a meeting summarization assistant for finance meetings.",
             "hr": "You are a meeting summarization assistant for HR interviews.",
@@ -123,6 +127,7 @@ class SummaryService:
         )
         return (
             f"{scene_prompt} "
+            f"{self._build_glossary_instruction(glossary_terms)}"
             "Read the provided meeting transcript and return ONLY valid JSON. "
             "Use the same primary language as the transcript and do not translate content. "
             f"Primary language hint: {language_hint}. "
@@ -146,7 +151,12 @@ class SummaryService:
             "Do not output markdown or explanatory text."
         )
 
-    def _build_fallback_system_prompt(self, scene: str, language_hint: str) -> str:
+    def _build_fallback_system_prompt(
+        self,
+        scene: str,
+        language_hint: str,
+        glossary_terms: list[GlossaryTerm],
+    ) -> str:
         scene_hint = {
             "finance": "Prioritize budget topics, approvals, timelines, owners, dependencies, and risks.",
             "hr": "Prioritize candidate evaluation, interview outcomes, next-round scheduling, requested materials, and open concerns.",
@@ -157,6 +167,7 @@ class SummaryService:
         return (
             "You are a strict meeting summarization extractor. "
             f"{scene_hint} "
+            f"{self._build_glossary_instruction(glossary_terms)}"
             "Return ONLY valid JSON and do not invent unsupported facts. "
             "Use the same primary language as the transcript and keep the wording concise. "
             f"Primary language hint: {language_hint}. "
@@ -172,13 +183,37 @@ class SummaryService:
             "Do not output markdown or explanatory text."
         )
 
-    def _build_transcript_prompt(self, transcripts: list[TranscriptItem], language_hint: str) -> str:
+    def _build_transcript_prompt(
+        self,
+        transcripts: list[TranscriptItem],
+        language_hint: str,
+        glossary_terms: list[GlossaryTerm],
+    ) -> str:
         lines = [f"Primary language hint: {language_hint}", "Transcript:"]
+        if glossary_terms:
+            lines = [f"Primary language hint: {language_hint}", "Glossary:"]
+            lines.extend(self._format_glossary_term(term) for term in glossary_terms)
+            lines.append("Transcript:")
         lines.extend(
             f"[#{item.transcript_index} {item.speaker} {item.start:.2f}s-{item.end:.2f}s] {item.text}"
             for item in transcripts
         )
         return "\n".join(lines)
+
+    def _build_glossary_instruction(self, glossary_terms: list[GlossaryTerm]) -> str:
+        if not glossary_terms:
+            return ""
+        return (
+            "Use the custom glossary when interpreting product names, acronyms, and domain terms. "
+            "Preserve glossary terms in titles, summaries, decisions, risks, and action items when relevant. "
+        )
+
+    def _format_glossary_term(self, term: GlossaryTerm) -> str:
+        if term.replacement:
+            return f"- {term.term} => {term.replacement}"
+        if term.note:
+            return f"- {term.term}: {term.note}"
+        return f"- {term.term}"
 
     async def _request_summary(
         self,

@@ -15,8 +15,10 @@ from app.core.config import Settings
 from app.schemas.transcript import TranscriptSegment
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationResult, DiarizationService
+from app.services.glossary_service import GlossaryService
 from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.meeting_history_service import MeetingHistoryService
+from app.services.raw_audio_retention_service import RawAudioRetentionService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -66,6 +68,7 @@ class StubRealtimeDiarizationService:
 def build_settings(tmp_path, **overrides) -> Settings:
     values = {
         "meeting_history_db_path": str(tmp_path / "meeting_history.sqlite3"),
+        "raw_audio_dir": str(tmp_path / "raw_audio"),
         "demo_mode": True,
         "default_asr_provider": "demo",
         "diarization_mode": "disabled",
@@ -181,6 +184,7 @@ def test_demo_websocket_emits_outputs_and_writes_history(tmp_path) -> None:
         meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
+        glossary_service=GlossaryService(settings),
     )
     app.state.meeting_history_service = meeting_history_service
 
@@ -240,6 +244,8 @@ def test_demo_upload_finalizes_without_ffmpeg_or_external_keys(tmp_path) -> None
         meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
+        glossary_service=GlossaryService(settings),
+        raw_audio_retention_service=RawAudioRetentionService(settings),
     )
     app = FastAPI()
     app.include_router(meetings_router)

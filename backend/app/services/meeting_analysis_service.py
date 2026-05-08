@@ -10,11 +10,13 @@ from app.schemas.analysis import (
     MeetingAnalysis,
     MeetingAnalysisHighlight,
     MeetingEngagementLevel,
+    ParticipantAnalysis,
     MeetingSentimentLevel,
     MeetingSignalCounts,
     MeetingSignalType,
 )
 from app.clients.dashscope_client import DashScopeClient
+from app.schemas.glossary import GlossaryTerm
 from app.schemas.transcript import TranscriptItem
 
 logger = logging.getLogger(__name__)
@@ -104,17 +106,19 @@ class MeetingAnalysisService:
         self,
         transcripts: list[TranscriptItem],
         scene: str,
+        *,
+        glossary_terms: list[GlossaryTerm] | None = None,
     ) -> MeetingAnalysis:
         if not transcripts:
             return MeetingAnalysis.empty()
         if not self.is_configured:
-            logger.warning("DashScope is not configured; returning empty meeting analysis.")
-            return MeetingAnalysis.empty()
+            logger.warning("DashScope is not configured; returning rule-based meeting analysis.")
+            return self._fallback_rule_based_analysis(transcripts)
 
         try:
             content = await self._dashscope_client.create_chat_completion(
-                system_prompt=self._build_system_prompt(scene),
-                user_prompt=self._build_transcript_prompt(transcripts),
+                system_prompt=self._build_system_prompt(scene, glossary_terms or []),
+                user_prompt=self._build_transcript_prompt(transcripts, glossary_terms or []),
             )
             payload = json.loads(self._strip_code_fence(content))
             analysis = MeetingAnalysis.model_validate(payload)
@@ -123,13 +127,15 @@ class MeetingAnalysisService:
             logger.error("Meeting analysis generation failed: %s", exc)
             return self._fallback_rule_based_analysis(transcripts)
 
-    def _build_system_prompt(self, scene: str) -> str:
+    def _build_system_prompt(self, scene: str, glossary_terms: list[GlossaryTerm]) -> str:
         scene_hint = {
             "finance": "你正在分析一场财务或业务决策会议。",
             "hr": "你正在分析一场 HR 面试或招聘沟通。",
         }.get(scene, "你正在分析一场工作会议。")
+        glossary_hint = self._build_glossary_prompt(glossary_terms)
         return (
             f"{scene_hint}"
+            f"{glossary_hint}"
             "请分析转写中的情绪动态与参与度模式。"
             "你必须特别关注四类互动信号："
             "1. agreement：明确同意、认可、支持，例如“我同意”“可以推进”“没问题”；"
@@ -148,11 +154,12 @@ class MeetingAnalysisService:
             "如果没有明显信号，highlights 可以为空，但不要忽略明确的同意、反对、紧张、犹豫表达。"
         )
 
-    def _build_transcript_prompt(self, transcripts: list[TranscriptItem]) -> str:
-        lines = [
+    def _build_transcript_prompt(self, transcripts: list[TranscriptItem], glossary_terms: list[GlossaryTerm]) -> str:
+        lines = self._build_glossary_lines(glossary_terms)
+        lines.extend(
             f"[#{index} {item.speaker} {item.start:.2f}s-{item.end:.2f}s] {item.text}"
             for index, item in enumerate(transcripts)
-        ]
+        )
         return "\n".join(lines)
 
     def _strip_code_fence(self, content: str) -> str:
@@ -182,6 +189,7 @@ class MeetingAnalysisService:
             update={
                 "signal_counts": counts,
                 "highlights": highlights,
+                "participants": self._build_participant_analyses(transcripts, highlights),
             }
         )
 
@@ -220,6 +228,7 @@ class MeetingAnalysisService:
             engagement_summary=engagement_summary,
             signal_counts=counts if total_signals else base_analysis.signal_counts,
             highlights=highlights or base_analysis.highlights,
+            participants=self._build_participant_analyses(transcripts, highlights or base_analysis.highlights),
         )
 
     def _build_rule_based_highlights(
@@ -294,6 +303,130 @@ class MeetingAnalysisService:
             current = getattr(counts, highlight.signal.value)
             setattr(counts, highlight.signal.value, current + 1)
         return counts
+
+    def _build_participant_analyses(
+        self,
+        transcripts: list[TranscriptItem],
+        highlights: list[MeetingAnalysisHighlight],
+    ) -> list[ParticipantAnalysis]:
+        speaker_stats: dict[str, dict[str, object]] = {}
+        for transcript in transcripts:
+            speaker = transcript.speaker or "Unknown"
+            stats = speaker_stats.setdefault(
+                speaker,
+                {
+                    "transcript_count": 0,
+                    "speaking_time_seconds": 0.0,
+                    "highlights": [],
+                },
+            )
+            stats["transcript_count"] = int(stats["transcript_count"]) + 1
+            duration = max(0.0, transcript.end - transcript.start)
+            stats["speaking_time_seconds"] = float(stats["speaking_time_seconds"]) + duration
+
+        for highlight in highlights:
+            if highlight.transcript_index < 0 or highlight.transcript_index >= len(transcripts):
+                continue
+            speaker = transcripts[highlight.transcript_index].speaker or "Unknown"
+            stats = speaker_stats.setdefault(
+                speaker,
+                {
+                    "transcript_count": 0,
+                    "speaking_time_seconds": 0.0,
+                    "highlights": [],
+                },
+            )
+            cast_highlights = stats["highlights"]
+            if isinstance(cast_highlights, list):
+                cast_highlights.append(highlight)
+
+        participants: list[ParticipantAnalysis] = []
+        max_transcript_count = max(
+            (int(stats["transcript_count"]) for stats in speaker_stats.values()),
+            default=1,
+        )
+        for speaker, stats in speaker_stats.items():
+            speaker_highlights = [
+                highlight
+                for highlight in stats["highlights"]
+                if isinstance(highlight, MeetingAnalysisHighlight)
+            ]
+            counts = self._build_signal_counts(speaker_highlights)
+            total_signals = counts.agreement + counts.disagreement + counts.tension + counts.hesitation
+            negative_signals = counts.disagreement + counts.tension
+            if negative_signals and counts.agreement:
+                sentiment = MeetingSentimentLevel.MIXED
+            elif negative_signals:
+                sentiment = MeetingSentimentLevel.NEGATIVE
+            elif counts.agreement:
+                sentiment = MeetingSentimentLevel.POSITIVE
+            else:
+                sentiment = MeetingSentimentLevel.NEUTRAL
+
+            transcript_count = int(stats["transcript_count"])
+            if total_signals >= 2 or transcript_count >= max(3, max_transcript_count):
+                engagement = MeetingEngagementLevel.HIGH
+            elif total_signals >= 1 or transcript_count > 0:
+                engagement = MeetingEngagementLevel.MEDIUM
+            else:
+                engagement = MeetingEngagementLevel.LOW
+
+            participants.append(
+                ParticipantAnalysis(
+                    speaker=speaker,
+                    transcript_count=transcript_count,
+                    speaking_time_seconds=round(float(stats["speaking_time_seconds"]), 2),
+                    signal_counts=counts,
+                    sentiment=sentiment,
+                    engagement_level=engagement,
+                    engagement_summary=self._build_participant_summary(
+                        speaker,
+                        transcript_count=transcript_count,
+                        total_signals=total_signals,
+                    ),
+                )
+            )
+        return sorted(participants, key=lambda item: (-item.transcript_count, item.speaker))
+
+    @staticmethod
+    def _build_participant_summary(
+        speaker: str,
+        *,
+        transcript_count: int,
+        total_signals: int,
+    ) -> str:
+        if total_signals:
+            return f"{speaker} contributed {transcript_count} utterances with {total_signals} interaction signals."
+        return f"{speaker} contributed {transcript_count} utterances with no explicit interaction signals."
+
+    @staticmethod
+    def _build_glossary_prompt(terms: list[GlossaryTerm]) -> str:
+        if not terms:
+            return ""
+        lines = ["自定义术语表如下，分析时请按这些术语理解，不要改写专有名词："]
+        for term in terms:
+            if term.replacement:
+                lines.append(f"{term.term} => {term.replacement}")
+            elif term.note:
+                lines.append(f"{term.term}: {term.note}")
+            else:
+                lines.append(term.term)
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _build_glossary_lines(terms: list[GlossaryTerm]) -> list[str]:
+        if not terms:
+            return []
+        lines = ["Glossary:"]
+        for term in terms:
+            if term.replacement:
+                lines.append(f"- {term.term} => {term.replacement}")
+            elif term.note:
+                lines.append(f"- {term.term}: {term.note}")
+            else:
+                lines.append(f"- {term.term}")
+        lines.append("Transcript:")
+        return lines
 
     @staticmethod
     def _contains_phrase(text: str, pattern: str) -> bool:

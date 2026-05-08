@@ -5,6 +5,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.schemas.analysis import MeetingAnalysis
+from app.schemas.glossary import GlossaryTerm
 from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptItem
 
@@ -62,6 +63,14 @@ class MeetingHistoryTranscriptItem(TranscriptItem):
     translated_target_lang: str | None = None
 
 
+class RawAudioMetadata(BaseModel):
+    raw_audio_retained: bool = False
+    raw_audio_path: str | None = None
+    raw_audio_filename: str | None = None
+    raw_audio_content_type: str | None = None
+    raw_audio_size_bytes: int | None = None
+
+
 class MeetingRecord(BaseModel):
     meeting_id: str
     status: MeetingHistoryStatus
@@ -79,6 +88,15 @@ class MeetingRecord(BaseModel):
     processing_stage: MeetingProcessingStage | None = None
     error_message: str | None = None
     source_name: str | None = None
+    raw_audio_retained: bool = False
+    raw_audio_filename: str | None = None
+    raw_audio_content_type: str | None = None
+    raw_audio_size_bytes: int | None = None
+    raw_audio_retained: bool = False
+    raw_audio_filename: str | None = None
+    raw_audio_content_type: str | None = None
+    raw_audio_size_bytes: int | None = None
+    glossary_terms: list[GlossaryTerm] = Field(default_factory=list)
     transcripts: list[MeetingHistoryTranscriptItem] = Field(default_factory=list)
     summary: MeetingSummary | None = None
     analysis: MeetingAnalysis | None = None

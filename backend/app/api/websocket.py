@@ -16,8 +16,9 @@ async def meeting_websocket(websocket: WebSocket) -> None:
     scene = websocket.query_params.get("scene", "finance")
     target_lang = websocket.query_params.get("target_lang")
     provider = websocket.query_params.get("provider")
+    glossary_terms = websocket.query_params.get("glossary_terms")
     manager = websocket.app.state.session_manager
-    session = await manager.create_session(websocket, scene, target_lang, provider)
+    session = await manager.create_session(websocket, scene, target_lang, provider, glossary_terms)
 
     try:
         while True:
