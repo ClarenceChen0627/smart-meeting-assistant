@@ -158,6 +158,7 @@ docker-compose up --build
 
 - [Architecture](docs/architecture.md)：系统总览、实时流程、上传流程和会议状态图。
 - [Configuration](docs/configuration.md)：demo 模式、provider 变量、前端覆盖配置和最小配置矩阵。
+- [质量评估](docs/zh/quality-evaluation.md)：使用私有音频 manifest 和复核报告，在本地评估真实 provider 的上传会议质量。
 - [API Reference](docs/api.md)：HTTP 接口、WebSocket 消息和 meeting record 字段。
 - [Speaker Diarization](docs/diarization.md)：offline / hybrid diarization 配置。
 - [diart Setup](docs/diart.md)：Windows 下实时 diart speaker update 的详细启动说明（[中文](docs/zh/diart.md)）。
@@ -182,9 +183,9 @@ docker-compose up --build
 
 ## Roadmap
 
-- 短期：demo smoke tests 已单独接入 CI，README 已补充 demo UI 截图入口。
-- 中期：Vitest 前端交互测试、Markdown 会议纪要导出、上传失败重试和错误恢复已实现。
-- 长期：后台 worker、可选原始音频留存、参与者级分析和自定义术语表已实现。
+- 短期：真实会议上传质量评估包已建立，支持私有音频 manifest、本地 provider 运行、自动检查和人工复核报告。
+- 中期：提升真实会议准确率和可修正性，包括持久化术语表、speaker 重命名 / 合并、移动端录音稳定性和会中滚动摘要。
+- 长期：面向生产使用补强质量治理和运行可靠性，包括 provider 质量 / 成本评估、分布式上传队列、任务恢复、可观测性和编辑审计历史。
 
 ## License
 
