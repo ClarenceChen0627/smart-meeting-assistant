@@ -65,6 +65,7 @@ smart-meeting-assistant/
 | 多语言会议翻译 | `TranslationService`、`DashScopeClient.translate_text`、`SessionManager._consume_translations`、`TranscriptPanel.tsx` | 每条最终 transcript 进入翻译队列，调用 DashScope 翻译模型，结果通过 WebSocket 返回并写入历史 |
 | 上下文感知行动项提取 | `SummaryService`、`ActionItem` schema、`ActionItemsPanel.tsx`、`MeetingHistoryService.update_action_item_status` | 总结 prompt 要求模型输出 action_items；后端再用规则识别承诺、动作动词、负责人、截止时间并去重；前端支持状态切换和编辑 |
 | 情绪和参与度分析 | `SentimentAnalysisService`、`MeetingAnalysis` schema、`MeetingAnalysisPanel.tsx` | 周期性或结束时调用大模型输出 overall_sentiment、engagement_level、signal_counts、highlights；失败时用规则 fallback |
+| 持久化术语表 | `GlossaryStoreService`、`GlossaryService`、`/api/glossary/terms`、`MeetingProcessingSettings.tsx` | 已保存术语写入 SQLite，并在 live / upload 会议中自动合并，用于转写纠错、总结和分析 prompt |
 
 ## 3. 实时转写实现
 
@@ -813,7 +814,7 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 
 数据库路径来自 `MEETING_HISTORY_DB_PATH`，默认 `data/meeting_history.sqlite3`。
 
-初始化时创建两张表。
+初始化时创建会议历史表，并由术语表服务创建全局术语表。
 
 `meetings`：
 
@@ -850,6 +851,15 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 
 主键是 `(meeting_id, transcript_index)`，并通过外键关联 `meetings`。删除 meeting 时 transcript 会级联删除。
 
+`glossary_terms` 由 `GlossaryStoreService` 维护，使用同一个 SQLite 文件：
+
+- `id`：主键。
+- `term`。
+- `term_key`：用于大小写不敏感去重。
+- `replacement`。
+- `note`。
+- `created_at`、`updated_at`。
+
 ### 10.2 历史写入点
 
 系统在多个步骤持续写入 SQLite：
@@ -866,6 +876,8 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 - summary 手动编辑：`update_summary_fields()`。
 - 标题手动编辑：`update_title()`。
 
+全局术语通过 `GlossaryStoreService` 写入。`GlossaryService.resolve_terms()` 按“单场会议术语、全局术语、`CUSTOM_GLOSSARY_TERMS`”的顺序合并，并按大小写不敏感的 `term` 去重，处理上限仍为 50 条。
+
 ### 10.3 历史 API
 
 `backend/app/api/meetings.py` 提供：
@@ -876,6 +888,13 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 - `PATCH /api/meetings/{meeting_id}/summary`：更新 summary。
 - `PATCH /api/meetings/{meeting_id}/action-items/{action_item_index}`：更新行动项状态。
 - `DELETE /api/meetings/{meeting_id}`：删除会议。
+
+`backend/app/api/glossary.py` 提供：
+
+- `GET /api/glossary/terms`：返回全局术语。
+- `POST /api/glossary/terms`：新增全局术语。
+- `PATCH /api/glossary/terms/{term_id}`：更新全局术语。
+- `DELETE /api/glossary/terms/{term_id}`：删除全局术语。
 
 前端 `MeetingHistorySheet.tsx` 展示历史列表，支持：
 
@@ -907,6 +926,8 @@ API 读取音频 bytes 后调用 `UploadMeetingService.start_upload()`，返回 
 - `summary`：实时会议 summary。
 - `analysis`：实时会议 analysis。
 - `historyList`：历史会议列表。
+- `globalGlossaryTerms`：全局术语表。
+- `glossaryTerms`：当前会议临时术语输入。
 - `serverError`、`statusMessage`：错误和状态提示。
 
 ### 11.2 实时会议状态流

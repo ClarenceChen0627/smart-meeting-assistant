@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.api.health import router as health_router
+from app.api.glossary import router as glossary_router
 from app.api.meetings import router as meetings_router
 from app.api.transcribe import router as transcribe_router
 from app.api.websocket import router as websocket_router
@@ -23,6 +24,7 @@ from app.services.audio_codec_service import AudioCodecService
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
 from app.services.glossary_service import GlossaryService
+from app.services.glossary_store_service import GlossaryStoreService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService
 from app.services.meeting_analysis_service import MeetingAnalysisService
@@ -57,9 +59,10 @@ async def lifespan(app: FastAPI):
     summary_service = SummaryService(dashscope_client)
     meeting_analysis_service = MeetingAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
-    glossary_service = GlossaryService(settings)
     raw_audio_retention_service = RawAudioRetentionService(settings)
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    glossary_store_service = GlossaryStoreService(settings.resolved_meeting_history_db_path)
+    glossary_service = GlossaryService(settings, glossary_store_service)
     upload_meeting_service = UploadMeetingService(
         asr_provider_service=asr_provider_service,
         audio_codec_service=audio_codec_service,
@@ -101,6 +104,7 @@ async def lifespan(app: FastAPI):
     app.state.meeting_analysis_service = meeting_analysis_service
     app.state.translation_service = translation_service
     app.state.glossary_service = glossary_service
+    app.state.glossary_store_service = glossary_store_service
     app.state.raw_audio_retention_service = raw_audio_retention_service
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service
@@ -163,6 +167,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(glossary_router)
 app.include_router(meetings_router)
 app.include_router(transcribe_router)
 app.include_router(websocket_router)

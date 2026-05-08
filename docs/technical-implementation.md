@@ -41,6 +41,7 @@ smart-meeting-assistant/
 | Transcript translation | `TranslationService`, `DashScopeClient.translate_text`, `SessionManager._consume_translations`, `TranscriptPanel.tsx` | Final transcript rows are translated to one selected target language and saved with the transcript row. |
 | Context-aware action items | `SummaryService`, `ActionItem`, `ActionItemsPanel.tsx`, meeting history APIs | The model returns action items; backend rules filter and augment them; the frontend supports editing and completion status updates. |
 | Sentiment and engagement analysis | `SentimentAnalysisService`, `MeetingAnalysis`, `MeetingAnalysisPanel.tsx` | The backend creates incremental and final meeting-level analysis snapshots, with rule fallback for obvious interaction signals. |
+| Persistent terminology glossary | `GlossaryStoreService`, `GlossaryService`, `/api/glossary/terms`, `MeetingProcessingSettings.tsx` | Saved glossary terms are stored in SQLite and automatically merged into live and upload meetings before per-meeting correction, summary, and analysis prompts run. |
 
 ## 3. Live Meeting Workflow
 
@@ -110,6 +111,8 @@ The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, anal
 
 The history APIs support list, detail, title update, summary update, action item status update, and deletion.
 
+`GlossaryStoreService` uses the same local SQLite file to store global terminology terms. `GlossaryService.resolve_terms()` merges per-meeting terms, saved global terms, and `CUSTOM_GLOSSARY_TERMS` in that order, deduplicating by case-insensitive `term` and keeping the same 50-term processing limit.
+
 Meeting notes can be exported from the summary panel as a Markdown file. The export is generated in the frontend from the displayed summary, meeting date, duration, risks, decisions, action items, and transcript references; no backend export endpoint is required.
 
 ## 8. Frontend State Model
@@ -122,6 +125,7 @@ Meeting notes can be exported from the summary panel as a Markdown file. The exp
 - active upload meeting state
 - selected history meeting state
 - transcript, summary, action item, and analysis display state
+- saved glossary terms and per-meeting temporary glossary input
 
 The top-level Live / Upload switch reuses the same result workspace. Historical meetings override the current live/upload view until the user exits history selection.
 

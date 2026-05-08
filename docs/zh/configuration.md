@@ -66,6 +66,7 @@ cd backend
 - `AUDIO_SAMPLE_RATE`: PCM 采样率，默认 `16000`。
 - `AUDIO_CHANNELS`: 音频声道数，默认 `1`。
 - `MEETING_HISTORY_DB_PATH`: SQLite 会议历史路径。
+- `CUSTOM_GLOSSARY_TERMS`: 可选环境默认术语表。`/api/glossary/terms` 保存的术语和单场会议术语会先合并，再使用这里的 fallback 列表。每行一个术语，或使用 `term=>replacement`。
 - `DEFAULT_ASR_PROVIDER`: `volcengine`、`dashscope` 或 `demo`。
 - `DASHSCOPE_API_KEY`: DashScope ASR、翻译、总结和分析使用的 key。
 - `DASHSCOPE_MODEL`: 总结和分析使用的 chat model。
