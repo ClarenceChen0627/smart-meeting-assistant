@@ -115,24 +115,33 @@ const buildSentimentDistribution = (analysis: MeetingAnalysis) => {
   ];
 };
 
-const buildSentimentTrend = (analysis: MeetingAnalysis, transcripts: DisplayTranscriptItem[]) => {
+export const buildSentimentTrend = (analysis: MeetingAnalysis, transcripts: DisplayTranscriptItem[]) => {
   const highlights = [...analysis.highlights].sort((a, b) => {
     const aTime = transcripts[a.transcript_index]?.start ?? a.transcript_index;
     const bTime = transcripts[b.transcript_index]?.start ?? b.transcript_index;
     return aTime - bTime;
   });
 
+  const fallback = sentimentFallbacks[analysis.overall_sentiment];
   if (!highlights.length) {
-    const fallback = sentimentFallbacks[analysis.overall_sentiment];
     return [
       { time: 'Start', positive: fallback.positive, neutral: fallback.neutral, negative: fallback.negative, overall: fallback.positive - fallback.negative },
-      { time: 'Current', positive: fallback.positive, neutral: fallback.neutral, negative: fallback.negative, overall: fallback.positive - fallback.negative }
+      { time: 'End', positive: fallback.positive, neutral: fallback.neutral, negative: fallback.negative, overall: fallback.positive - fallback.negative }
     ];
   }
 
   const running = { positive: 0, neutral: 0, negative: 0 };
+  const trend = [
+    {
+      time: 'Start',
+      positive: fallback.positive,
+      neutral: fallback.neutral,
+      negative: fallback.negative,
+      overall: fallback.positive - fallback.negative
+    }
+  ];
 
-  return highlights.map((highlight, index) => {
+  highlights.forEach((highlight, index) => {
     const bucket = signalToSentiment[highlight.signal];
     running[bucket] += 1;
 
@@ -142,14 +151,25 @@ const buildSentimentTrend = (analysis: MeetingAnalysis, transcripts: DisplayTran
     const negative = Math.max(0, 100 - positive - neutral);
     const transcript = transcripts[highlight.transcript_index];
 
-    return {
+    trend.push({
       time: transcript ? formatTime(transcript.start) : `#${highlight.transcript_index + 1}`,
       positive,
       neutral,
       negative,
       overall: positive - negative
-    };
+    });
   });
+
+  const lastPoint = trend[trend.length - 1];
+  trend.push({
+    time: 'End',
+    positive: lastPoint.positive,
+    neutral: lastPoint.neutral,
+    negative: lastPoint.negative,
+    overall: lastPoint.overall
+  });
+
+  return trend;
 };
 
 const buildParticipantEngagement = (

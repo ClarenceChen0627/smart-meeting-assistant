@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from pydantic import ValidationError
 
@@ -21,11 +22,76 @@ logger = logging.getLogger(__name__)
 
 class MeetingAnalysisService:
     _SIGNAL_PATTERNS: dict[MeetingSignalType, tuple[str, ...]] = {
-        MeetingSignalType.AGREEMENT: ("我同意", "同意这个方案", "可以推进", "没问题", "支持这个方案"),
-        MeetingSignalType.DISAGREEMENT: ("我不同意", "我不认为这样可行", "不合理", "不认可", "我反对"),
-        MeetingSignalType.TENSION: ("风险太高", "这样会出问题", "我很担心", "压力很大", "冲突"),
-        MeetingSignalType.HESITATION: ("我不太确定", "也许", "可能需要再确认", "再想想", "不确定"),
+        MeetingSignalType.AGREEMENT: (
+            "我同意",
+            "同意这个方案",
+            "可以推进",
+            "没问题",
+            "支持这个方案",
+            "i agree",
+            "agree with",
+            "yes",
+            "yeah",
+            "sure",
+            "of course",
+            "sounds good",
+            "works for me",
+            "that works",
+        ),
+        MeetingSignalType.DISAGREEMENT: (
+            "我不同意",
+            "我不认为这样可行",
+            "不合理",
+            "不认可",
+            "我反对",
+            "i disagree",
+            "do not agree",
+            "don't agree",
+            "not feasible",
+            "not reasonable",
+            "i object",
+            "i oppose",
+            "won't work",
+            "doesn't work",
+        ),
+        MeetingSignalType.TENSION: (
+            "风险太高",
+            "这样会出问题",
+            "我很担心",
+            "压力很大",
+            "冲突",
+            "risk is high",
+            "too risky",
+            "concerned",
+            "worry",
+            "worried",
+            "this will fail",
+            "pressure",
+            "conflict",
+            "blocked",
+        ),
+        MeetingSignalType.HESITATION: (
+            "我不太确定",
+            "也许",
+            "可能需要再确认",
+            "再想想",
+            "不确定",
+            "not sure",
+            "i'm not sure",
+            "i am not sure",
+            "maybe",
+            "might need",
+            "need to confirm",
+            "uncertain",
+            "i don't know",
+        ),
     }
+    _SIGNAL_PRIORITY = (
+        MeetingSignalType.TENSION,
+        MeetingSignalType.DISAGREEMENT,
+        MeetingSignalType.HESITATION,
+        MeetingSignalType.AGREEMENT,
+    )
 
     def __init__(self, dashscope_client: DashScopeClient) -> None:
         self._dashscope_client = dashscope_client
@@ -52,7 +118,7 @@ class MeetingAnalysisService:
             )
             payload = json.loads(self._strip_code_fence(content))
             analysis = MeetingAnalysis.model_validate(payload)
-            return self._augment_with_rule_based_highlights(analysis, transcripts)
+            return self._post_process_highlights(analysis, transcripts)
         except (json.JSONDecodeError, ValidationError, RuntimeError) as exc:
             logger.error("Meeting analysis generation failed: %s", exc)
             return self._fallback_rule_based_analysis(transcripts)
@@ -99,14 +165,25 @@ class MeetingAnalysisService:
                 cleaned = cleaned[:-3]
         return cleaned.strip()
 
-    def _augment_with_rule_based_highlights(
+    def _post_process_highlights(
         self,
         analysis: MeetingAnalysis,
         transcripts: list[TranscriptItem],
     ) -> MeetingAnalysis:
-        if analysis.highlights:
-            return analysis
-        return self._fallback_rule_based_analysis(transcripts, base_analysis=analysis)
+        candidates = [
+            highlight
+            for highlight in analysis.highlights
+            if self._is_valid_highlight(highlight, transcripts)
+        ]
+        candidates.extend(self._build_rule_based_highlights(transcripts))
+        highlights = self._select_highest_priority_highlights(candidates)
+        counts = self._build_signal_counts(highlights)
+        return analysis.model_copy(
+            update={
+                "signal_counts": counts,
+                "highlights": highlights,
+            }
+        )
 
     def _fallback_rule_based_analysis(
         self,
@@ -114,24 +191,8 @@ class MeetingAnalysisService:
         *,
         base_analysis: MeetingAnalysis | None = None,
     ) -> MeetingAnalysis:
-        highlights: list[MeetingAnalysisHighlight] = []
-        counts = MeetingSignalCounts()
-
-        for index, transcript in enumerate(transcripts):
-            text = transcript.text
-            for signal, patterns in self._SIGNAL_PATTERNS.items():
-                if any(pattern in text for pattern in patterns):
-                    highlights.append(
-                        MeetingAnalysisHighlight(
-                            transcript_index=index,
-                            signal=signal,
-                            severity="medium",
-                            reason=f"句子中出现了明显的 {signal.value} 表达。",
-                        )
-                    )
-                    current = getattr(counts, signal.value)
-                    setattr(counts, signal.value, current + 1)
-                    break
+        highlights = self._build_rule_based_highlights(transcripts)
+        counts = self._build_signal_counts(highlights)
 
         if base_analysis is None:
             base_analysis = MeetingAnalysis.empty()
@@ -160,3 +221,91 @@ class MeetingAnalysisService:
             signal_counts=counts if total_signals else base_analysis.signal_counts,
             highlights=highlights or base_analysis.highlights,
         )
+
+    def _build_rule_based_highlights(
+        self,
+        transcripts: list[TranscriptItem],
+    ) -> list[MeetingAnalysisHighlight]:
+        highlights: list[MeetingAnalysisHighlight] = []
+        for index, transcript in enumerate(transcripts):
+            for signal in self._SIGNAL_PRIORITY:
+                if self._text_matches_signal(transcript.text, signal):
+                    highlights.append(
+                        MeetingAnalysisHighlight(
+                            transcript_index=index,
+                            signal=signal,
+                            severity="medium",
+                            reason=f"句子中出现了明显的 {signal.value} 表达。",
+                        )
+                    )
+                    break
+        return highlights
+
+    def _is_valid_highlight(
+        self,
+        highlight: MeetingAnalysisHighlight,
+        transcripts: list[TranscriptItem],
+    ) -> bool:
+        if highlight.transcript_index < 0 or highlight.transcript_index >= len(transcripts):
+            return False
+        return self._text_matches_signal(
+            transcripts[highlight.transcript_index].text,
+            highlight.signal,
+        )
+
+    def _text_matches_signal(self, text: str, signal: MeetingSignalType) -> bool:
+        if signal == MeetingSignalType.AGREEMENT and self._looks_like_request_without_agreement(text):
+            return False
+        return any(
+            self._contains_phrase(text, pattern)
+            for pattern in self._SIGNAL_PATTERNS[signal]
+        )
+
+    def _looks_like_request_without_agreement(self, text: str) -> bool:
+        normalized = self._normalize_text(text)
+        if not re.search(r"\b(will|can|could|would)\s+you\b", normalized):
+            return False
+        return not any(
+            self._contains_phrase(text, pattern)
+            for pattern in self._SIGNAL_PATTERNS[MeetingSignalType.AGREEMENT]
+        )
+
+    def _select_highest_priority_highlights(
+        self,
+        candidates: list[MeetingAnalysisHighlight],
+    ) -> list[MeetingAnalysisHighlight]:
+        priority = {signal: index for index, signal in enumerate(self._SIGNAL_PRIORITY)}
+        by_transcript: dict[int, MeetingAnalysisHighlight] = {}
+        for candidate in candidates:
+            existing = by_transcript.get(candidate.transcript_index)
+            if existing is None or priority[candidate.signal] < priority[existing.signal]:
+                by_transcript[candidate.transcript_index] = candidate
+        return [
+            by_transcript[index]
+            for index in sorted(by_transcript)
+        ]
+
+    def _build_signal_counts(
+        self,
+        highlights: list[MeetingAnalysisHighlight],
+    ) -> MeetingSignalCounts:
+        counts = MeetingSignalCounts()
+        for highlight in highlights:
+            current = getattr(counts, highlight.signal.value)
+            setattr(counts, highlight.signal.value, current + 1)
+        return counts
+
+    @staticmethod
+    def _contains_phrase(text: str, pattern: str) -> bool:
+        normalized_text = MeetingAnalysisService._normalize_text(text)
+        normalized_pattern = MeetingAnalysisService._normalize_text(pattern)
+        if re.fullmatch(r"[a-z0-9][a-z0-9' ]*[a-z0-9]", normalized_pattern):
+            return re.search(
+                rf"(?<![a-z0-9]){re.escape(normalized_pattern)}(?![a-z0-9])",
+                normalized_text,
+            ) is not None
+        return normalized_pattern in normalized_text
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text.casefold()).strip()

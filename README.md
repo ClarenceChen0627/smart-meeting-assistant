@@ -183,7 +183,7 @@ docker-compose up --build
 ## Roadmap
 
 - Short term: demo smoke tests are split out for CI, and README now links to demo UI screenshots.
-- Medium term: add frontend interaction tests, export meeting notes, and improve upload retry/error recovery.
+- Medium term: Vitest frontend interaction tests, Markdown meeting notes export, and upload retry/error recovery are implemented.
 - Long term: introduce background workers, optional raw audio retention, participant-level analysis, and custom terminology support.
 
 ## License

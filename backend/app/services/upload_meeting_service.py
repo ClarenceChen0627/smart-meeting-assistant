@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import cast
+from collections.abc import Awaitable, Callable
+from typing import TypeVar, cast
 from uuid import uuid4
 
 from app.schemas.meeting_history import (
@@ -23,9 +24,12 @@ from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 class UploadMeetingService:
+    RUNTIME_RETRY_COUNT = 1
+
     def __init__(
         self,
         *,
@@ -123,9 +127,12 @@ class UploadMeetingService:
                     filename=filename,
                     content_type=content_type,
                 )
-            transcripts, resolved_provider = await self._transcribe_audio(
-                wav_audio,
-                preferred_provider=initial_provider,
+            transcripts, resolved_provider = await self._run_with_runtime_retries(
+                "upload transcription",
+                lambda: self._transcribe_audio(
+                    wav_audio,
+                    preferred_provider=initial_provider,
+                ),
             )
             if resolved_provider != initial_provider:
                 self._meeting_history_service.update_provider(meeting_id, resolved_provider)
@@ -146,11 +153,17 @@ class UploadMeetingService:
                 )
 
             self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.ANALYZING)
-            analysis = await self._meeting_analysis_service.analyze_meeting(transcripts, scene)
+            analysis = await self._run_with_runtime_retries(
+                "upload analysis",
+                lambda: self._meeting_analysis_service.analyze_meeting(transcripts, scene),
+            )
             self._meeting_history_service.update_analysis(meeting_id, analysis)
 
             self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.SUMMARIZING)
-            summary = await self._summary_service.generate_summary(transcripts, scene)
+            summary = await self._run_with_runtime_retries(
+                "upload summary",
+                lambda: self._summary_service.generate_summary(transcripts, scene),
+            )
             self._meeting_history_service.update_summary(meeting_id, summary)
         except asyncio.CancelledError:
             raise
@@ -194,6 +207,25 @@ class UploadMeetingService:
                 speaker_is_final=diarization_result.succeeded,
             )
         return transcripts, selection.provider_name
+
+    async def _run_with_runtime_retries(
+        self,
+        operation_name: str,
+        operation: Callable[[], Awaitable[T]],
+    ) -> T:
+        for attempt in range(self.RUNTIME_RETRY_COUNT + 1):
+            try:
+                return await operation()
+            except RuntimeError:
+                if attempt >= self.RUNTIME_RETRY_COUNT:
+                    raise
+                logger.warning(
+                    "%s failed with a runtime error; retrying once.",
+                    operation_name,
+                    exc_info=True,
+                )
+
+        raise RuntimeError(f"{operation_name} failed after retry.")
 
     async def _translate_transcripts(
         self,
