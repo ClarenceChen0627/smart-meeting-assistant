@@ -5,17 +5,23 @@ import re
 from app.core.config import Settings
 from app.schemas.glossary import GlossaryTerm
 from app.schemas.transcript import TranscriptItem
+from app.services.glossary_store_service import GlossaryStoreService
 
 
 class GlossaryService:
     MAX_TERMS = 50
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, glossary_store_service: GlossaryStoreService | None = None) -> None:
         self._settings = settings
         self._default_terms = self.parse_terms(settings.custom_glossary_terms)
+        self._glossary_store_service = glossary_store_service
 
     def resolve_terms(self, raw_terms: str | None) -> list[GlossaryTerm]:
-        terms = [*self._default_terms, *self.parse_terms(raw_terms)]
+        terms = [
+            *self.parse_terms(raw_terms),
+            *self._list_persisted_terms(),
+            *self._default_terms,
+        ]
         deduped: list[GlossaryTerm] = []
         seen: set[str] = set()
         for term in terms:
@@ -27,6 +33,14 @@ class GlossaryService:
             if len(deduped) >= self.MAX_TERMS:
                 break
         return deduped
+
+    def _list_persisted_terms(self) -> list[GlossaryTerm]:
+        if self._glossary_store_service is None:
+            return []
+        return [
+            GlossaryTerm(term=record.term, replacement=record.replacement, note=record.note)
+            for record in self._glossary_store_service.list_terms()
+        ]
 
     def apply_to_transcripts(
         self,

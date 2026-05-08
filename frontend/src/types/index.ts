@@ -19,6 +19,30 @@ export type MeetingHistoryStatus = 'draft' | 'processing' | 'failed' | 'finalize
 export type MeetingSourceType = 'live' | 'upload'
 export type MeetingProcessingStage = 'transcribing' | 'translating' | 'analyzing' | 'summarizing'
 
+export interface GlossaryTerm {
+  term: string
+  replacement: string | null
+  note: string | null
+}
+
+export interface GlossaryTermRecord extends GlossaryTerm {
+  id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface GlossaryTermCreate {
+  term: string
+  replacement?: string | null
+  note?: string | null
+}
+
+export interface GlossaryTermUpdate {
+  term?: string | null
+  replacement?: string | null
+  note?: string | null
+}
+
 export type TranslationTargetLanguage =
   | 'en'
   | 'es'
@@ -145,6 +169,7 @@ export interface MeetingHistoryListItem {
 }
 
 export interface MeetingRecord extends MeetingHistoryListItem {
+  glossary_terms: GlossaryTerm[]
   transcripts: MeetingHistoryTranscriptItem[]
   summary: MeetingSummary | null
   analysis: MeetingAnalysis | null

@@ -17,6 +17,9 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import type {
   ActionItemStatus,
   ASRProvider,
+  GlossaryTermCreate,
+  GlossaryTermRecord,
+  GlossaryTermUpdate,
   MeetingAnalysis,
   MeetingHistoryListItem,
   MeetingHistoryTranscriptItem,
@@ -170,6 +173,9 @@ export default function App() {
   const [uploadInputKey, setUploadInputKey] = useState(0);
   const [retainRawAudio, setRetainRawAudio] = useState(false);
   const [glossaryTerms, setGlossaryTerms] = useState('');
+  const [globalGlossaryTerms, setGlobalGlossaryTerms] = useState<GlossaryTermRecord[]>([]);
+  const [isGlossaryLoading, setIsGlossaryLoading] = useState(false);
+  const [glossaryError, setGlossaryError] = useState('');
 
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
@@ -214,6 +220,103 @@ export default function App() {
     }
   };
 
+  const loadGlobalGlossaryTerms = async () => {
+    try {
+      setIsGlossaryLoading(true);
+      setGlossaryError('');
+      const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms`);
+      if (!response.ok) {
+        throw new Error(`Failed to load glossary terms (${response.status})`);
+      }
+      const payload = await response.json() as GlossaryTermRecord[];
+      setGlobalGlossaryTerms(payload);
+    } catch (error) {
+      setGlossaryError(error instanceof Error ? error.message : 'Failed to load glossary terms');
+    } finally {
+      setIsGlossaryLoading(false);
+    }
+  };
+
+  const handleCreateGlobalGlossaryTerm = async (term: GlossaryTermCreate) => {
+    setGlossaryError('');
+    const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(term),
+    });
+
+    if (!response.ok) {
+      let detail = `Failed to create glossary term (${response.status})`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        if (payload.detail) {
+          detail = payload.detail;
+        }
+      } catch {
+        // ignore response parse failures
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json() as GlossaryTermRecord;
+    setGlobalGlossaryTerms((prev) => [...prev, payload].sort((left, right) => left.term.localeCompare(right.term)));
+  };
+
+  const handleUpdateGlobalGlossaryTerm = async (termId: string, term: GlossaryTermUpdate) => {
+    setGlossaryError('');
+    const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms/${termId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(term),
+    });
+
+    if (!response.ok) {
+      let detail = `Failed to update glossary term (${response.status})`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        if (payload.detail) {
+          detail = payload.detail;
+        }
+      } catch {
+        // ignore response parse failures
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json() as GlossaryTermRecord;
+    setGlobalGlossaryTerms((prev) =>
+      prev
+        .map((item) => (item.id === termId ? payload : item))
+        .sort((left, right) => left.term.localeCompare(right.term))
+    );
+  };
+
+  const handleDeleteGlobalGlossaryTerm = async (termId: string) => {
+    setGlossaryError('');
+    const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms/${termId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      let detail = `Failed to delete glossary term (${response.status})`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        if (payload.detail) {
+          detail = payload.detail;
+        }
+      } catch {
+        // ignore response parse failures
+      }
+      throw new Error(detail);
+    }
+
+    setGlobalGlossaryTerms((prev) => prev.filter((item) => item.id !== termId));
+  };
+
   const refreshMeetingDetail = async (meetingId: string) => {
     const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`);
     if (!response.ok) {
@@ -229,6 +332,7 @@ export default function App() {
 
   useEffect(() => {
     void loadHistoryList();
+    void loadGlobalGlossaryTerms();
   }, []);
 
   useEffect(() => {
@@ -762,6 +866,12 @@ export default function App() {
               glossaryTerms={glossaryTerms}
               disabled={isRecording || isStarting || isFinalizing || isUploadingFile}
               onGlossaryTermsChange={setGlossaryTerms}
+              globalGlossaryTerms={globalGlossaryTerms}
+              isGlossaryLoading={isGlossaryLoading}
+              glossaryError={glossaryError}
+              onCreateGlobalTerm={handleCreateGlobalGlossaryTerm}
+              onUpdateGlobalTerm={handleUpdateGlobalGlossaryTerm}
+              onDeleteGlobalTerm={handleDeleteGlobalGlossaryTerm}
             />
 
             {inputMode === 'live' ? (

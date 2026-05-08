@@ -76,7 +76,7 @@ Use [Configuration](docs/configuration.md) for the minimal variable matrix and d
 - SQLite-backed meeting history for live and uploaded meetings.
 - Optional per-upload raw audio retention with saved meeting metadata.
 - Participant-level analysis rollups for speaker engagement and interaction signals.
-- Custom terminology glossary support for live and uploaded meetings.
+- Persistent custom terminology glossary support for live and uploaded meetings.
 - Editable saved titles, summary fields, and action item status.
 - Optional Windows portable Electron client.
 

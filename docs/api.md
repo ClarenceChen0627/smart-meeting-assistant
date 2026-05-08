@@ -36,6 +36,10 @@ Returns service metadata, `demoMode`, and provider availability.
 
 - `GET /`
 - `GET /api/health`
+- `GET /api/glossary/terms`
+- `POST /api/glossary/terms`
+- `PATCH /api/glossary/terms/{term_id}`
+- `DELETE /api/glossary/terms/{term_id}`
 - `GET /api/meetings`
 - `GET /api/meetings/{meeting_id}`
 - `PATCH /api/meetings/{meeting_id}/title`
@@ -47,6 +51,41 @@ Returns service metadata, `demoMode`, and provider availability.
 - `POST /api/transcribe/batch`
 
 `POST /api/meetings/upload` is the product upload workflow. `POST /api/transcribe` and `POST /api/transcribe/batch` are transcript-only utility/debug endpoints.
+
+## Glossary Terms
+
+Global glossary terms are stored in the local SQLite database configured by `MEETING_HISTORY_DB_PATH`. Live and upload meetings automatically merge saved terms with per-meeting `glossary_terms` and `CUSTOM_GLOSSARY_TERMS`.
+
+`GET /api/glossary/terms`
+
+Returns saved terms:
+
+```json
+[
+  {
+    "id": "d2e4f6",
+    "term": "queue wen",
+    "replacement": "Qwen",
+    "note": "DashScope model family",
+    "created_at": "2026-05-09T01:00:00Z",
+    "updated_at": "2026-05-09T01:00:00Z"
+  }
+]
+```
+
+`POST /api/glossary/terms`
+
+```json
+{
+  "term": "queue wen",
+  "replacement": "Qwen",
+  "note": "DashScope model family"
+}
+```
+
+`PATCH /api/glossary/terms/{term_id}` accepts any subset of `term`, `replacement`, and `note`. `DELETE /api/glossary/terms/{term_id}` removes a saved term.
+
+Duplicate terms are rejected case-insensitively with `409 Conflict`. Per-meeting terms take precedence when a saved term uses the same `term`.
 
 ## Upload Meeting
 

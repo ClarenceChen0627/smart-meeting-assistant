@@ -16,10 +16,12 @@ from app.clients.volcengine_asr_client import VolcengineTranscriptSegment
 from app.services.asr_provider_service import ASRProviderService
 from app.core.config import Settings
 from app.schemas.analysis import MeetingAnalysis
+from app.schemas.glossary import GlossaryTermCreate
 from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
 from app.services.glossary_service import GlossaryService
+from app.services.glossary_store_service import GlossaryStoreService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.raw_audio_retention_service import RawAudioRetentionService
@@ -312,6 +314,7 @@ def build_session_manager(
     meeting_analysis_service=None,
     translation_service=None,
     realtime_diarization_service=None,
+    glossary_store_service=None,
 ) -> tuple[Settings, SessionManager]:
     settings = build_settings(
         tmp_path,
@@ -333,7 +336,7 @@ def build_session_manager(
         meeting_analysis_service=meeting_analysis_service or StubMeetingAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=MeetingHistoryService(settings.resolved_meeting_history_db_path),
-        glossary_service=GlossaryService(settings),
+        glossary_service=GlossaryService(settings, glossary_store_service),
     )
 
 
@@ -350,6 +353,7 @@ def build_upload_service(
     summary_service=None,
     meeting_analysis_service=None,
     translation_service=None,
+    glossary_store_service=None,
 ) -> tuple[Settings, MeetingHistoryService, UploadMeetingService]:
     settings = build_settings(
         tmp_path,
@@ -370,7 +374,7 @@ def build_upload_service(
         meeting_analysis_service=meeting_analysis_service or StubMeetingAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=meeting_history_service,
-        glossary_service=GlossaryService(settings),
+        glossary_service=GlossaryService(settings, glossary_store_service),
         raw_audio_retention_service=RawAudioRetentionService(settings),
     )
 
@@ -943,6 +947,97 @@ def test_upload_can_retain_raw_audio_and_apply_glossary(tmp_path) -> None:
     assert finalized_payload["analysis"]["participants"][0]["speaker"] == "Unknown"
     assert retained_path.exists() is False
     assert delete_response.status_code == 204
+
+
+def test_upload_uses_persisted_global_glossary_terms(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    glossary_store_service = GlossaryStoreService(tmp_path / "meeting_history.sqlite3")
+    glossary_store_service.create_term(GlossaryTermCreate(term="queue wen", replacement="Qwen"))
+    dashscope_client = StubASRClient(
+        "dashscope",
+        [TranscriptSegment(text="queue wen roadmap is ready", start=0.0, end=1.0)],
+    )
+    volcengine_client = StubASRClient("volcengine", [], is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        glossary_store_service=glossary_store_service,
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            data={"scene": "general", "provider": "dashscope"},
+            files={"file": ("meeting.wav", b"raw-audio", "audio/wav")},
+        )
+        assert response.status_code == 202
+        finalized_payload = wait_for_meeting_status(client, response.json()["meeting_id"], "finalized")
+
+    assert finalized_payload["glossary_terms"][0]["term"] == "queue wen"
+    assert finalized_payload["transcripts"][0]["text"] == "Qwen roadmap is ready"
+
+
+def test_live_session_uses_persisted_global_glossary_terms(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    glossary_store_service = GlossaryStoreService(tmp_path / "meeting_history.sqlite3")
+    glossary_store_service.create_term(GlossaryTermCreate(term="queue wen", replacement="Qwen"))
+    dashscope_client = StubASRClient(
+        "dashscope",
+        [TranscriptSegment(text="queue wen roadmap is ready", start=0.0, end=1.0)],
+    )
+    volcengine_client = StubASRClient("volcengine", [], is_configured=False)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        glossary_store_service=glossary_store_service,
+    )
+    app = FastAPI()
+    app.include_router(websocket_router)
+    app.include_router(meetings_router)
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&provider=dashscope") as websocket:
+            session_started = websocket.receive_json()
+            websocket.send_bytes(b"audio")
+            messages = receive_until(
+                websocket,
+                lambda items: any(
+                    item["type"] == "transcript_update"
+                    and item["data"]["text"] == "Qwen roadmap is ready"
+                    for item in items
+                ),
+            )
+            websocket.send_json({"type": "finalize"})
+            receive_until(websocket, lambda items: any(item["type"] == "summary" for item in items))
+
+        detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    assert any(item["type"] == "transcript_update" for item in messages)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["glossary_terms"][0]["term"] == "queue wen"
+    assert detail_response.json()["transcripts"][0]["text"] == "Qwen roadmap is ready"
 
 
 def test_upload_detail_polling_returns_partial_results_before_summary(tmp_path) -> None:

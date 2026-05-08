@@ -36,6 +36,10 @@ Language:
 
 - `GET /`
 - `GET /api/health`
+- `GET /api/glossary/terms`
+- `POST /api/glossary/terms`
+- `PATCH /api/glossary/terms/{term_id}`
+- `DELETE /api/glossary/terms/{term_id}`
 - `GET /api/meetings`
 - `GET /api/meetings/{meeting_id}`
 - `PATCH /api/meetings/{meeting_id}/title`
@@ -48,6 +52,41 @@ Language:
 
 `POST /api/meetings/upload` 是产品上传流程。`POST /api/transcribe` 和 `POST /api/transcribe/batch` 是只返回转写结果的工具/调试接口。
 
+## 术语表
+
+全局术语表保存在 `MEETING_HISTORY_DB_PATH` 指向的本地 SQLite 数据库中。live 和 upload 会议会自动合并已保存术语、单场会议传入的 `glossary_terms` 和 `CUSTOM_GLOSSARY_TERMS`。
+
+`GET /api/glossary/terms`
+
+返回已保存术语：
+
+```json
+[
+  {
+    "id": "d2e4f6",
+    "term": "queue wen",
+    "replacement": "Qwen",
+    "note": "DashScope model family",
+    "created_at": "2026-05-09T01:00:00Z",
+    "updated_at": "2026-05-09T01:00:00Z"
+  }
+]
+```
+
+`POST /api/glossary/terms`
+
+```json
+{
+  "term": "queue wen",
+  "replacement": "Qwen",
+  "note": "DashScope model family"
+}
+```
+
+`PATCH /api/glossary/terms/{term_id}` 可更新 `term`、`replacement`、`note` 的任意子集。`DELETE /api/glossary/terms/{term_id}` 删除已保存术语。
+
+重复术语按大小写不敏感方式返回 `409 Conflict`。如果单场会议术语和已保存术语的 `term` 相同，单场会议术语优先。
+
 ## Upload Meeting
 
 `POST /api/meetings/upload`
@@ -58,6 +97,8 @@ Multipart 字段：
 - `scene`：`general`、`finance` 或 `hr`。
 - `target_lang`：可选翻译目标语言，例如 `en`、`zh`、`ja` 或 `es`。
 - `provider`：可选 ASR provider：`volcengine`、`dashscope` 或 `demo`。
+- `retain_raw_audio`：可选布尔值。为 true 且服务端开启留存时，原始上传会保存到 `RAW_AUDIO_DIR`。
+- `glossary_terms`：可选自定义术语。每行一个术语，或使用 `queue wen=>Qwen` 形式。
 
 接口返回 `202 Accepted` 和一个 `MeetingRecord`。前端应轮询 `GET /api/meetings/{meeting_id}`，直到 `status` 变为 `finalized` 或 `failed`。
 
@@ -68,6 +109,7 @@ Multipart 字段：
 ```text
 ws://localhost:8080/ws/meeting?scene=general&target_lang=en&provider=volcengine
 ws://localhost:8080/ws/meeting?scene=general&target_lang=ja&provider=demo
+ws://localhost:8080/ws/meeting?scene=general&provider=dashscope&glossary_terms=queue%20wen%3D%3EQwen
 ```
 
 客户端发送原始 PCM 音频 bytes。结束实时会议时发送：
@@ -193,5 +235,8 @@ ws://localhost:8080/ws/meeting?scene=general&target_lang=ja&provider=demo
 - `source_type`：`live` 或 `upload`。
 - `provider`：`volcengine`、`dashscope` 或 `demo`。
 - `processing_stage`：`transcribing`、`translating`、`analyzing`、`summarizing` 或 `null`。
+- `raw_audio_retained`：原始上传音频是否已留存。
+- `raw_audio_filename`、`raw_audio_content_type`、`raw_audio_size_bytes`：留存音频元数据；服务端不暴露文件系统路径。
+- `glossary_terms`：本次会议实际使用并保存的术语。
 - `summary_manually_edited`：用户编辑 summary 字段后为 true。
 - `title_manually_edited`：用户重命名保存会议后为 true。
