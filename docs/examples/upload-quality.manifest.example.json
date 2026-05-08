@@ -1,0 +1,37 @@
+{
+  "cases": [
+    {
+      "id": "sales-qwen-upload-001",
+      "audio_path": "audio/sales-qwen-upload-001.wav",
+      "scene": "general",
+      "provider": "dashscope",
+      "target_lang": "en",
+      "glossary_terms": [
+        "queue wen=>Qwen",
+        "SLA",
+        "OKR"
+      ],
+      "allow_provider_fallback": false,
+      "expected": {
+        "status": "finalized",
+        "min_transcript_count": 8,
+        "required_terms": [
+          "Qwen",
+          "SLA"
+        ],
+        "forbidden_terms": [
+          "queue wen"
+        ],
+        "min_speaker_count": 2,
+        "require_final_speakers": true,
+        "require_translations": true,
+        "require_summary": true,
+        "require_action_items": true,
+        "require_analysis": true,
+        "reference_transcript": "Paste the human-reviewed transcript for this private audio sample here.",
+        "max_wer": 0.35,
+        "max_cer": 0.25
+      }
+    }
+  ]
+}

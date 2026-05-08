@@ -159,6 +159,7 @@ docker-compose up --build
 
 - [Architecture](docs/architecture.md): system overview, realtime flow, upload flow, and meeting state diagrams.
 - [Configuration](docs/configuration.md): demo mode, provider variables, frontend overrides, and minimum setup matrix.
+- [Quality Evaluation](docs/quality-evaluation.md): local real-provider upload evaluation with private audio manifests and review reports.
 - [API Reference](docs/api.md): HTTP endpoints, WebSocket messages, and meeting record fields.
 - [Speaker Diarization](docs/diarization.md): offline and hybrid diarization setup.
 - [diart Setup](docs/diart.md): detailed Windows setup notes for realtime diart speaker updates ([中文](docs/zh/diart.md)).
@@ -183,9 +184,9 @@ docker-compose up --build
 
 ## Roadmap
 
-- Short term: demo smoke tests are split out for CI, and README now links to demo UI screenshots.
-- Medium term: Vitest frontend interaction tests, Markdown meeting notes export, and upload retry/error recovery are implemented.
-- Long term: background workers, optional raw audio retention, participant-level analysis, and custom terminology support are implemented.
+- Short term: real-meeting upload quality evaluation package is established for private audio manifests, local provider runs, automated checks, and manual review reports.
+- Medium term: improve real-meeting accuracy and correction workflows, including persistent glossaries, speaker rename/merge, mobile recording reliability, and rolling in-meeting summaries.
+- Long term: strengthen quality governance and production reliability with provider quality/cost evaluation, distributed upload queues, task recovery, observability, and edit audit history.
 
 ## License
 
