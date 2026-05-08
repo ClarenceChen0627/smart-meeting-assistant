@@ -33,7 +33,23 @@ If the phone shows `Microphone recording is not supported in this browser`, the 
 - Test through a real HTTPS staging domain.
 - Use a trusted HTTPS tunnel to the local frontend.
 - Configure Vite HTTPS with a certificate trusted by the phone, then access the HTTPS URL.
-- For quick Android Chrome-only checks, temporarily allow the LAN origin through Chrome's insecure-origin development flag.
+- For quick Android Chrome-only checks, temporarily allow the LAN origin through Chrome's insecure-origin development flag:
+
+  1. Open Chrome on the phone and go to:
+
+     ```text
+     chrome://flags/#unsafely-treat-insecure-origin-as-secure
+     ```
+
+  2. Set the flag to `Enabled`.
+  3. Add the exact frontend origin, including protocol and port:
+
+     ```text
+     http://<computer-lan-ip>:5173
+     ```
+
+  4. Relaunch Chrome when prompted.
+  5. Reopen the frontend at the same origin and test live recording.
 
 Do not treat browser flags as production validation. Production mobile use should be served through HTTPS and WebSocket traffic should use WSS.
 
