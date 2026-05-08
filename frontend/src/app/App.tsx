@@ -442,10 +442,24 @@ export default function App() {
       }
     },
     onStatusChange: (status) => {
-      console.log(status);
+      setStatusMessage(status);
     },
     onError: (error) => {
       setServerError(error instanceof Error ? error.message : String(error));
+    },
+    onInterrupted: (message) => {
+      setIsRecording(false);
+      setIsFinalizing(true);
+      setStatusMessage('Recording interrupted. Finalizing captured audio...');
+      void finalize()
+        .catch((error) => {
+          setServerError(error instanceof Error ? error.message : message);
+        })
+        .finally(() => {
+          setIsFinalizing(false);
+          disconnect({ preserveStatusMessage: true });
+          void loadHistoryList();
+        });
     }
   });
 
@@ -481,7 +495,7 @@ export default function App() {
       setIsRecording(true);
       setIsFinalizing(false);
     } catch (error) {
-      setServerError('Failed to start recording');
+      setServerError(error instanceof Error ? error.message : 'Failed to start recording');
       disconnect();
     } finally {
       setIsStarting(false);
@@ -865,9 +879,9 @@ export default function App() {
 
   return (
     <div className="size-full bg-gray-50 flex flex-col">
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-start justify-between gap-6">
-          <div>
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 lg:gap-6">
+          <div className="min-w-0">
             <div className="inline-flex rounded-xl bg-gray-100 p-1 mb-3">
               <button
                 type="button"
@@ -907,7 +921,7 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap justify-end">
+          <div className="flex w-full lg:w-auto items-center gap-3 flex-wrap justify-start lg:justify-end">
             <button
               type="button"
               onClick={() => setIsHistorySheetOpen(true)}
@@ -965,7 +979,7 @@ export default function App() {
                 <button
                   onClick={toggleRecording}
                   disabled={isStarting || isFinalizing}
-                  className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-colors min-w-[200px] justify-center ${
+                  className={`flex flex-1 sm:flex-none items-center gap-2 px-5 sm:px-6 py-3 rounded-lg transition-colors min-w-[160px] sm:min-w-[200px] justify-center ${
                     isStarting || isFinalizing ? 'bg-gray-400 text-white cursor-wait' :
                     isRecording
                       ? 'bg-red-600 text-white hover:bg-red-700'

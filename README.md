@@ -67,6 +67,7 @@ Use [Configuration](docs/configuration.md) for the minimal variable matrix and d
 ## Features
 
 - Live microphone capture over WebSocket.
+- Mobile recording guardrails for microphone support, suspended audio, background tabs, and Wake Lock availability.
 - Switchable ASR providers: Volcengine Doubao, DashScope Paraformer, and local demo.
 - Realtime transcript rendering with speaker labels.
 - Transcript translation to 10 target languages.
@@ -179,7 +180,7 @@ docker-compose up --build
 - Volcengine native speaker clustering applies only to the Volcengine ASR provider path.
 - Summary is generated after `finalize`, not continuously refreshed during the meeting.
 - Realtime ASR can still misrecognize technical terms before glossary correction runs.
-- Mobile browser recording is less reliable than desktop.
+- Mobile background and lock-screen recording remains limited by the operating system and browser; the frontend detects common interruptions and warns the user.
 - Upload processing uses an in-process worker queue; distributed workers are still out of scope.
 
 ## Roadmap

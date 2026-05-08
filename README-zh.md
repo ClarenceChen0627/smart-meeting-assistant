@@ -67,6 +67,7 @@ npm run dev
 ## 功能
 
 - 浏览器麦克风采集，通过 WebSocket 实时传音频。
+- 移动端录音稳定性保护，覆盖麦克风能力检测、音频挂起、后台页面和 Wake Lock 可用性提示。
 - 可切换 ASR provider：Volcengine Doubao、DashScope Paraformer、本地 demo。
 - 实时 transcript 展示与 speaker label。
 - transcript 翻译，支持 10 种目标语言。
@@ -178,7 +179,7 @@ docker-compose up --build
 - Volcengine 原生 speaker clustering 只作用于 Volcengine ASR provider 路径。
 - Summary 只在 `finalize` 后生成，不在会议中持续刷新。
 - 实时 ASR 在术语表纠错前仍可能误识别技术术语。
-- 移动端浏览器录音可靠性弱于桌面端。
+- 移动端后台和锁屏录音仍受操作系统与浏览器限制；前端会检测常见中断并提示用户。
 - Upload processing 使用进程内 worker queue；分布式 worker queue 仍不在当前范围内。
 
 ## Roadmap

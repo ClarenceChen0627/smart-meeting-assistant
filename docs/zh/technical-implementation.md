@@ -80,12 +80,13 @@ smart-meeting-assistant/
    ```
 
 2. 调用 `useWebSocket.connect()` 建立后端连接。
-3. 调用 `useAudioRecording.startRecording()` 请求麦克风权限并启动音频处理。
+3. 调用 `useAudioRecording.startRecording()` 检查浏览器麦克风和音频处理能力，请求麦克风权限并启动音频处理。
 4. `useAudioRecording.ts` 使用 `navigator.mediaDevices.getUserMedia()` 获取单声道音频，并开启浏览器的 echo cancellation、noise suppression、auto gain control。
-5. Hook 创建 `AudioContext` 和 `ScriptProcessorNode`，在 `onaudioprocess` 中拿到 Float32 PCM。
-6. 如果浏览器音频采样率不是 16000Hz，`downsampleAudio()` 会把音频降采样到 16kHz。
-7. `encodePcm16Chunk()` 把 Float32 样本编码成小端 signed 16-bit PCM。
-8. `onAudioData` 回调把每个 PCM chunk 交给 `useWebSocket.sendAudio()`。
+5. Hook 监听麦克风 track 的 `ended` / `mute` / `unmute`、`AudioContext` 状态、页面可见性、`pagehide` 和 Wake Lock 可用性，移动端录音被系统中断时会给出明确状态提示。
+6. Hook 创建 `AudioContext` 和 `ScriptProcessorNode`，在 `onaudioprocess` 中拿到 Float32 PCM。
+7. 如果浏览器音频采样率不是 16000Hz，`downsampleAudio()` 会把音频降采样到 16kHz。
+8. `encodePcm16Chunk()` 把 Float32 样本编码成小端 signed 16-bit PCM。
+9. `onAudioData` 回调把每个 PCM chunk 交给 `useWebSocket.sendAudio()`。
 
 这意味着后端实时 WebSocket 收到的是裸 PCM 片段，不是 WebM 文件。后端 ASR 流因此可以直接按 PCM 格式发送给 provider。
 
@@ -1117,11 +1118,12 @@ sequenceDiagram
 
 1. 实时 summary 只在 finalize 后生成；会议过程中只做周期性 analysis，不持续生成 summary。
 2. 翻译是单目标语言，不支持一次会议同时输出多种目标语言。
-3. 上传任务是进程内 `asyncio.create_task()`，服务重启会中断 processing；启动时 `reconcile_processing_uploads()` 会把中断的上传记录标为 failed。
-4. 原始上传音频和实时临时音频不会作为历史附件长期保存，只保存转写、翻译、总结、分析等结构化结果。
-5. 参与度分析的最终输出是会议级；前端会基于 speaker 发言数估算 participant engagement，但后端 schema 没有输出正式的参与者级分析。
-6. ASR、总结、翻译、分析质量依赖第三方模型配置与网络状态。
-7. DashScope 路径的 speaker diarization 依赖 pyannote、HuggingFace token、模型加载和本地算力。
+3. 移动端后台和锁屏录音仍由操作系统与浏览器控制；前端能检测常见中断并提示，但不能保证页面挂起后继续采集。
+4. 上传任务是进程内 `asyncio.create_task()`，服务重启会中断 processing；启动时 `reconcile_processing_uploads()` 会把中断的上传记录标为 failed。
+5. 原始上传音频和实时临时音频不会作为历史附件长期保存，只保存转写、翻译、总结、分析等结构化结果。
+6. 参与度分析的最终输出是会议级；前端会基于 speaker 发言数估算 participant engagement，但后端 schema 没有输出正式的参与者级分析。
+7. ASR、总结、翻译、分析质量依赖第三方模型配置与网络状态。
+8. DashScope 路径的 speaker diarization 依赖 pyannote、HuggingFace token、模型加载和本地算力。
 
 ## 16. 与需求文档逐项对应
 
