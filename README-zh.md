@@ -67,6 +67,7 @@ npm run dev
 ## 功能
 
 - 浏览器麦克风采集，通过 WebSocket 实时传音频。
+- 移动端录音稳定性保护，覆盖麦克风能力检测、音频挂起、后台页面和 Wake Lock 可用性提示。
 - 可切换 ASR provider：Volcengine Doubao、DashScope Paraformer、本地 demo。
 - 实时 transcript 展示与 speaker label。
 - transcript 翻译，支持 10 种目标语言。
@@ -159,6 +160,7 @@ docker-compose up --build
 - [Architecture](docs/architecture.md)：系统总览、实时流程、上传流程和会议状态图。
 - [Configuration](docs/configuration.md)：demo 模式、provider 变量、前端覆盖配置和最小配置矩阵。
 - [质量评估](docs/zh/quality-evaluation.md)：使用私有音频 manifest 和复核报告，在本地评估真实 provider 的上传会议质量。
+- [移动端浏览器测试](docs/zh/mobile-testing.md)：手机验收时的局域网、HTTPS、麦克风和 WebSocket 注意事项。
 - [API Reference](docs/api.md)：HTTP 接口、WebSocket 消息和 meeting record 字段。
 - [Speaker Diarization](docs/diarization.md)：offline / hybrid diarization 配置。
 - [diart Setup](docs/diart.md)：Windows 下实时 diart speaker update 的详细启动说明（[中文](docs/zh/diart.md)）。
@@ -178,7 +180,7 @@ docker-compose up --build
 - Volcengine 原生 speaker clustering 只作用于 Volcengine ASR provider 路径。
 - Summary 只在 `finalize` 后生成，不在会议中持续刷新。
 - 实时 ASR 在术语表纠错前仍可能误识别技术术语。
-- 移动端浏览器录音可靠性弱于桌面端。
+- 移动端后台和锁屏录音仍受操作系统与浏览器限制；前端会检测常见中断并提示用户。
 - Upload processing 使用进程内 worker queue；分布式 worker queue 仍不在当前范围内。
 
 ## Roadmap

@@ -49,13 +49,14 @@ The live workflow starts in `frontend/src/app/App.tsx`:
 
 1. The frontend builds a WebSocket URL with `scene`, `target_lang`, and `provider`.
 2. `useWebSocket.connect()` opens `/ws/meeting`.
-3. `useAudioRecording.startRecording()` gets microphone access and starts browser audio processing.
-4. Audio is downsampled to 16 kHz PCM and sent as binary WebSocket frames.
-5. `backend/app/api/websocket.py` accepts the socket and delegates to `SessionManager`.
-6. `SessionManager.create_session()` creates a draft meeting in SQLite, starts ASR consumption, and emits `session_started`.
-7. ASR segments are normalized into `TranscriptItem` rows, persisted, and emitted as `transcript` or `transcript_update`.
-8. Final transcript rows can trigger translation and periodic analysis.
-9. On `{ "type": "finalize" }`, the backend finishes ASR, runs final speaker confirmation when enabled, emits final analysis and summary, marks the meeting finalized, and closes the socket.
+3. `useAudioRecording.startRecording()` checks browser microphone and audio-processing support, gets microphone access, and starts browser audio processing.
+4. The hook tracks microphone `ended` / `mute` / `unmute`, `AudioContext` state changes, page visibility, `pagehide`, and screen Wake Lock availability so mobile interruptions are surfaced to the user.
+5. Audio is downsampled to 16 kHz PCM and sent as binary WebSocket frames.
+6. `backend/app/api/websocket.py` accepts the socket and delegates to `SessionManager`.
+7. `SessionManager.create_session()` creates a draft meeting in SQLite, starts ASR consumption, and emits `session_started`.
+8. ASR segments are normalized into `TranscriptItem` rows, persisted, and emitted as `transcript` or `transcript_update`.
+9. Final transcript rows can trigger translation and periodic analysis.
+10. On `{ "type": "finalize" }`, the backend finishes ASR, runs final speaker confirmation when enabled, emits final analysis and summary, marks the meeting finalized, and closes the socket.
 
 ## 4. ASR Provider Selection
 
@@ -178,6 +179,7 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 
 - Summary generation happens after finalize or upload completion, not continuously during a live meeting.
 - Translation supports one target language per meeting.
+- Mobile background and lock-screen recording is still controlled by the operating system and browser; the frontend detects common interruptions but cannot guarantee capture while suspended.
 - Raw audio is not stored in meeting history.
 - Upload processing is async but still in-process; there is no distributed worker queue.
 - Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
