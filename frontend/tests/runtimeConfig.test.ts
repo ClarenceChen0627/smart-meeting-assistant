@@ -45,11 +45,11 @@ describe('runtimeConfig', () => {
   });
 
   it('ignores localhost overrides when the page is opened from another device', () => {
-    setWindowLocation('http://10.34.38.36:5173/');
+    setWindowLocation('http://192.168.1.23:5173/');
     vi.stubEnv('VITE_API_BASE_URL', 'http://localhost:8080');
     vi.stubEnv('VITE_WS_BASE_URL', 'ws://localhost:8080');
 
     expect(buildApiBaseUrl()).toBe('');
-    expect(buildWebSocketBaseUrl()).toBe('ws://10.34.38.36:5173');
+    expect(buildWebSocketBaseUrl()).toBe('ws://192.168.1.23:5173');
   });
 });
