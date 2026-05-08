@@ -11,6 +11,7 @@ import { SummaryPanel } from './components/SummaryPanel';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import { TranslationControls } from './components/TranslationControls';
 import { UploadMeetingControls } from './components/UploadMeetingControls';
+import { buildApiBaseUrl, buildWebSocketUrl } from './runtimeConfig';
 import { buildUploadStatusMessage, processingStageLabels } from './uploadStatus';
 import { useAudioRecording } from '../hooks/useAudioRecording';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -42,33 +43,6 @@ interface DisplayTranscriptItem extends TranscriptItem {
   analysisReason?: string;
   analysisSeverity?: 'low' | 'medium' | 'high';
 }
-
-const buildApiBaseUrl = () => {
-  const explicitBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
-  if (explicitBaseUrl) {
-    return explicitBaseUrl.replace(/\/+$/, '');
-  }
-
-  const webSocketBaseUrl = import.meta.env.VITE_WS_BASE_URL?.trim();
-  if (webSocketBaseUrl) {
-    return webSocketBaseUrl.replace(/^ws/i, 'http').replace(/\/+$/, '');
-  }
-
-  return 'http://localhost:8080';
-};
-
-const buildWebSocketUrl = (scene: string, targetLang: string, provider: ASRProvider, glossaryTerms: string) => {
-  const baseUrl = import.meta.env.VITE_WS_BASE_URL?.trim() || 'ws://localhost:8080';
-  const params = new URLSearchParams({
-    scene,
-    target_lang: targetLang,
-    provider,
-  });
-  if (glossaryTerms.trim()) {
-    params.set('glossary_terms', glossaryTerms.trim());
-  }
-  return `${baseUrl.replace(/\/+$/, '')}/ws/meeting?${params.toString()}`;
-};
 
 const sourceLabels: Record<MeetingSourceType, string> = {
   live: 'live',

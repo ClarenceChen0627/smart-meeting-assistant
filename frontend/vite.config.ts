@@ -6,6 +6,7 @@ import react from '@vitejs/plugin-react'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const devProxyTarget = process.env.SMART_MEETING_DEV_PROXY_TARGET || 'http://localhost:8080'
 
 
 function figmaAssetResolver() {
@@ -33,6 +34,20 @@ export default defineConfig({
     alias: {
       // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
+    },
+  },
+
+  server: {
+    proxy: {
+      '/api': {
+        target: devProxyTarget,
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: devProxyTarget,
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 
