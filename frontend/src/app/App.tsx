@@ -5,6 +5,7 @@ import { ActionItemsPanel } from './components/ActionItemsPanel';
 import { ASRProviderControls } from './components/ASRProviderControls';
 import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
 import { MeetingHistorySheet } from './components/MeetingHistorySheet';
+import { MeetingProcessingSettings } from './components/MeetingProcessingSettings';
 import { SceneControls } from './components/SceneControls';
 import { SummaryPanel } from './components/SummaryPanel';
 import { TranscriptPanel } from './components/TranscriptPanel';
@@ -757,6 +758,11 @@ export default function App() {
               currentLanguage={currentLanguage}
               onLanguageChange={(lang) => setCurrentLanguage(lang as TranslationTargetLanguage)}
             />
+            <MeetingProcessingSettings
+              glossaryTerms={glossaryTerms}
+              disabled={isRecording || isStarting || isFinalizing || isUploadingFile}
+              onGlossaryTermsChange={setGlossaryTerms}
+            />
 
             {inputMode === 'live' ? (
               <>
@@ -809,9 +815,7 @@ export default function App() {
                 disabled={isRecording || isStarting || isFinalizing}
                 isRetryAvailable={canRetryUpload}
                 retainRawAudio={retainRawAudio}
-                glossaryTerms={glossaryTerms}
                 onRetainRawAudioChange={setRetainRawAudio}
-                onGlossaryTermsChange={setGlossaryTerms}
                 onFileChange={handleUploadFileChange}
                 onUpload={() => {
                   void handleUploadMeeting();

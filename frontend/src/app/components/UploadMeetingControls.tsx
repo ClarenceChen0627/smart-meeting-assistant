@@ -3,7 +3,6 @@ import { FileAudio, Loader2, RefreshCw, Settings2, Upload } from 'lucide-react';
 
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Textarea } from './ui/textarea';
 
 interface UploadMeetingControlsProps {
   inputKey: number;
@@ -12,9 +11,7 @@ interface UploadMeetingControlsProps {
   disabled: boolean;
   isRetryAvailable?: boolean;
   retainRawAudio?: boolean;
-  glossaryTerms?: string;
   onRetainRawAudioChange?: (enabled: boolean) => void;
-  onGlossaryTermsChange?: (terms: string) => void;
   onFileChange: (file: File | null) => void;
   onUpload: () => void;
 }
@@ -26,21 +23,14 @@ export function UploadMeetingControls({
   disabled,
   isRetryAvailable = false,
   retainRawAudio = false,
-  glossaryTerms = '',
   onRetainRawAudioChange = () => undefined,
-  onGlossaryTermsChange = () => undefined,
   onFileChange,
   onUpload,
 }: UploadMeetingControlsProps) {
   const canSubmit = Boolean(selectedFileName || isRetryAvailable);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const glossaryTermCount = glossaryTerms
-    .split(/[\n;]+/)
-    .map((term) => term.trim())
-    .filter(Boolean).length;
   const activeOptions = [
     retainRawAudio ? 'audio retained' : null,
-    glossaryTermCount ? `${glossaryTermCount} glossary ${glossaryTermCount === 1 ? 'term' : 'terms'}` : null,
   ].filter((item): item is string => Boolean(item));
 
   return (
@@ -110,7 +100,7 @@ export function UploadMeetingControls({
 
       {isSettingsOpen && (
         <div className="mt-2 border-t border-gray-100 pt-2">
-          <label className="mb-2 flex items-center gap-2 text-xs text-gray-600" htmlFor="retain-raw-audio">
+          <label className="flex items-center gap-2 text-xs text-gray-600" htmlFor="retain-raw-audio">
             <input
               id="retain-raw-audio"
               type="checkbox"
@@ -121,13 +111,6 @@ export function UploadMeetingControls({
             />
             <span>Retain original audio</span>
           </label>
-          <Textarea
-            value={glossaryTerms}
-            disabled={disabled || isUploading}
-            onChange={(event) => onGlossaryTermsChange(event.target.value)}
-            placeholder="Qwen => Tongyi Qianwen; OKR: objectives and key results"
-            className="min-h-14 bg-gray-50 text-xs"
-          />
         </div>
       )}
     </div>
