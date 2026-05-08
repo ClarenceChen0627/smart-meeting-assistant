@@ -58,6 +58,8 @@ Multipart fields:
 - `scene`: `general`, `finance`, or `hr`.
 - `target_lang`: optional translation target such as `en`, `zh`, `ja`, or `es`.
 - `provider`: optional ASR provider: `volcengine`, `dashscope`, or `demo`.
+- `retain_raw_audio`: optional boolean. When true and server retention is enabled, the original upload is stored under `RAW_AUDIO_DIR`.
+- `glossary_terms`: optional custom terminology. Use one term per line or entries like `queue wen=>Qwen`.
 
 Returns `202 Accepted` with a `MeetingRecord`. The frontend should poll `GET /api/meetings/{meeting_id}` until `status` is `finalized` or `failed`.
 
@@ -68,6 +70,7 @@ Connect to:
 ```text
 ws://localhost:8080/ws/meeting?scene=general&target_lang=en&provider=volcengine
 ws://localhost:8080/ws/meeting?scene=general&target_lang=ja&provider=demo
+ws://localhost:8080/ws/meeting?scene=general&provider=dashscope&glossary_terms=queue%20wen%3D%3EQwen
 ```
 
 The client sends raw PCM audio bytes. To finish a live meeting, send:
@@ -153,7 +156,23 @@ The client sends raw PCM audio bytes. To finish a live meeting, send:
       "tension": 1,
       "hesitation": 0
     },
-    "highlights": []
+    "highlights": [],
+    "participants": [
+      {
+        "speaker": "Speaker 1",
+        "transcript_count": 4,
+        "speaking_time_seconds": 18.2,
+        "signal_counts": {
+          "agreement": 1,
+          "disagreement": 0,
+          "tension": 0,
+          "hesitation": 0
+        },
+        "sentiment": "positive",
+        "engagement_level": "high",
+        "engagement_summary": "Speaker 1 contributed 4 utterances with 1 interaction signals."
+      }
+    ]
   }
 }
 ```
@@ -193,5 +212,8 @@ Important fields:
 - `source_type`: `live` or `upload`.
 - `provider`: `volcengine`, `dashscope`, or `demo`.
 - `processing_stage`: `transcribing`, `translating`, `analyzing`, `summarizing`, or `null`.
+- `raw_audio_retained`: true when the original upload was retained.
+- `raw_audio_filename`, `raw_audio_content_type`, `raw_audio_size_bytes`: retained audio metadata; the server does not expose the filesystem path.
+- `glossary_terms`: custom terminology terms saved with the meeting record.
 - `summary_manually_edited`: true after the user edits summary fields.
 - `title_manually_edited`: true after the user renames a saved meeting.

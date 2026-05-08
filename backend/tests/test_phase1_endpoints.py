@@ -19,8 +19,10 @@ from app.schemas.analysis import MeetingAnalysis
 from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
+from app.services.glossary_service import GlossaryService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.meeting_analysis_service import MeetingAnalysisService
+from app.services.raw_audio_retention_service import RawAudioRetentionService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -140,7 +142,7 @@ class StubConfiguredTranslationService:
 class StubSummaryService:
     is_configured = True
 
-    async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
+    async def generate_summary(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingSummary:
         return MeetingSummary(
             title="Meeting plan follow-up",
             overview="The team reviewed the meeting plan and wrapped with a final follow-up action.",
@@ -169,7 +171,7 @@ class StubSummaryService:
 class StubMeetingAnalysisService:
     is_configured = True
 
-    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+    async def analyze_meeting(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingAnalysis:
         return MeetingAnalysis.empty()
 
 
@@ -179,7 +181,7 @@ class IncrementingMeetingAnalysisService:
     def __init__(self) -> None:
         self.call_count = 0
 
-    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+    async def analyze_meeting(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingAnalysis:
         self.call_count += 1
         return MeetingAnalysis(
             overall_sentiment="neutral",
@@ -189,9 +191,9 @@ class IncrementingMeetingAnalysisService:
 
 
 class SlowSummaryService(StubSummaryService):
-    async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
+    async def generate_summary(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingSummary:
         await asyncio.sleep(0.05)
-        return await super().generate_summary(transcripts, scene)
+        return await super().generate_summary(transcripts, scene, glossary_terms=glossary_terms)
 
 
 class FlakySummaryService(StubSummaryService):
@@ -199,17 +201,17 @@ class FlakySummaryService(StubSummaryService):
         self.failures_before_success = failures_before_success
         self.call_count = 0
 
-    async def generate_summary(self, transcripts, scene: str) -> MeetingSummary:
+    async def generate_summary(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingSummary:
         self.call_count += 1
         if self.call_count <= self.failures_before_success:
             raise RuntimeError("Transient summary failure in test")
-        return await super().generate_summary(transcripts, scene)
+        return await super().generate_summary(transcripts, scene, glossary_terms=glossary_terms)
 
 
 class SlowMeetingAnalysisService(IncrementingMeetingAnalysisService):
-    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+    async def analyze_meeting(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingAnalysis:
         await asyncio.sleep(0.05)
-        return await super().analyze_meeting(transcripts, scene)
+        return await super().analyze_meeting(transcripts, scene, glossary_terms=glossary_terms)
 
 
 class FlakyMeetingAnalysisService(StubMeetingAnalysisService):
@@ -217,11 +219,11 @@ class FlakyMeetingAnalysisService(StubMeetingAnalysisService):
         self.failures_before_success = failures_before_success
         self.call_count = 0
 
-    async def analyze_meeting(self, transcripts, scene: str) -> MeetingAnalysis:
+    async def analyze_meeting(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingAnalysis:
         self.call_count += 1
         if self.call_count <= self.failures_before_success:
             raise RuntimeError("Transient analysis failure in test")
-        return await super().analyze_meeting(transcripts, scene)
+        return await super().analyze_meeting(transcripts, scene, glossary_terms=glossary_terms)
 
 
 class StubDiarizationService(DiarizationService):
@@ -292,6 +294,7 @@ def build_three_segments() -> list[TranscriptSegment]:
 def build_settings(tmp_path, **overrides) -> Settings:
     return Settings(
         meeting_history_db_path=str(tmp_path / "meeting_history.sqlite3"),
+        raw_audio_dir=str(tmp_path / "raw_audio"),
         **overrides,
     )
 
@@ -330,6 +333,7 @@ def build_session_manager(
         meeting_analysis_service=meeting_analysis_service or StubMeetingAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=MeetingHistoryService(settings.resolved_meeting_history_db_path),
+        glossary_service=GlossaryService(settings),
     )
 
 
@@ -366,6 +370,8 @@ def build_upload_service(
         meeting_analysis_service=meeting_analysis_service or StubMeetingAnalysisService(),
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=meeting_history_service,
+        glossary_service=GlossaryService(settings),
+        raw_audio_retention_service=RawAudioRetentionService(settings),
     )
 
 
@@ -877,6 +883,66 @@ def test_upload_endpoint_creates_processing_record_and_finalizes_with_results(tm
     assert list_response.status_code == 200
     assert list_response.json()[0]["source_type"] == "upload"
     assert list_response.json()[0]["title"] == "Meeting plan follow-up"
+
+
+def test_upload_can_retain_raw_audio_and_apply_glossary(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient(
+        "dashscope",
+        [
+            TranscriptSegment(text="queue wen roadmap is ready", start=0.0, end=1.0),
+            TranscriptSegment(text="I agree with the launch plan", start=1.2, end=2.2),
+        ],
+    )
+    volcengine_client = StubASRClient("volcengine", [], is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    _, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        meeting_analysis_service=MeetingAnalysisService(type(
+            "UnconfiguredDashScope",
+            (),
+            {"is_configured": False},
+        )()),
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            data={
+                "scene": "general",
+                "provider": "dashscope",
+                "retain_raw_audio": "true",
+                "glossary_terms": "queue wen=>Qwen",
+            },
+            files={"file": ("meeting.wav", b"raw-audio", "audio/wav")},
+        )
+        assert response.status_code == 202
+        meeting_id = response.json()["meeting_id"]
+        finalized_payload = wait_for_meeting_status(client, meeting_id, "finalized")
+        delete_response = client.delete(f"/api/meetings/{meeting_id}")
+
+    retained_path = tmp_path / "raw_audio" / meeting_id / "meeting.wav"
+    assert finalized_payload["raw_audio_retained"] is True
+    assert finalized_payload["raw_audio_filename"] == "meeting.wav"
+    assert finalized_payload["raw_audio_size_bytes"] == len(b"raw-audio")
+    assert finalized_payload["glossary_terms"][0]["term"] == "queue wen"
+    assert finalized_payload["glossary_terms"][0]["replacement"] == "Qwen"
+    assert finalized_payload["transcripts"][0]["text"] == "Qwen roadmap is ready"
+    assert finalized_payload["analysis"]["participants"][0]["speaker"] == "Unknown"
+    assert retained_path.exists() is False
+    assert delete_response.status_code == 204
 
 
 def test_upload_detail_polling_returns_partial_results_before_summary(tmp_path) -> None:
@@ -1462,6 +1528,12 @@ def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_u
         "title",
         "title_manually_edited",
         "summary_manually_edited",
+        "raw_audio_retained",
+        "raw_audio_path",
+        "raw_audio_filename",
+        "raw_audio_content_type",
+        "raw_audio_size_bytes",
+        "glossary_terms_json",
     }.issubset(migrated_columns)
 
 
@@ -1547,6 +1619,7 @@ def test_demo_provider_websocket_generates_meeting_outputs(tmp_path) -> None:
         meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
+        glossary_service=GlossaryService(settings),
     )
     app.state.meeting_history_service = meeting_history_service
 
@@ -1605,6 +1678,8 @@ def test_demo_upload_finalizes_without_audio_conversion_or_external_keys(tmp_pat
         meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
+        glossary_service=GlossaryService(settings),
+        raw_audio_retention_service=RawAudioRetentionService(settings),
     )
     app = FastAPI()
     app.include_router(meetings_router)

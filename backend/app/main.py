@@ -22,9 +22,11 @@ from app.core.logging import configure_logging
 from app.services.audio_codec_service import AudioCodecService
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
+from app.services.glossary_service import GlossaryService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService
 from app.services.meeting_analysis_service import MeetingAnalysisService
+from app.services.raw_audio_retention_service import RawAudioRetentionService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -55,6 +57,8 @@ async def lifespan(app: FastAPI):
     summary_service = SummaryService(dashscope_client)
     meeting_analysis_service = MeetingAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
+    glossary_service = GlossaryService(settings)
+    raw_audio_retention_service = RawAudioRetentionService(settings)
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
     upload_meeting_service = UploadMeetingService(
         asr_provider_service=asr_provider_service,
@@ -65,6 +69,8 @@ async def lifespan(app: FastAPI):
         meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
+        glossary_service=glossary_service,
+        raw_audio_retention_service=raw_audio_retention_service,
     )
     session_manager = SessionManager(
         settings=settings,
@@ -77,6 +83,7 @@ async def lifespan(app: FastAPI):
         meeting_analysis_service=meeting_analysis_service,
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
+        glossary_service=glossary_service,
     )
 
     app.state.settings = settings
@@ -93,6 +100,8 @@ async def lifespan(app: FastAPI):
     app.state.summary_service = summary_service
     app.state.meeting_analysis_service = meeting_analysis_service
     app.state.translation_service = translation_service
+    app.state.glossary_service = glossary_service
+    app.state.raw_audio_retention_service = raw_audio_retention_service
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service
     app.state.session_manager = session_manager

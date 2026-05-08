@@ -60,6 +60,9 @@ class Settings:
     sample_rate: int = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))
     audio_channels: int = int(os.getenv("AUDIO_CHANNELS", "1"))
     meeting_history_db_path: str = os.getenv("MEETING_HISTORY_DB_PATH", "data/meeting_history.sqlite3")
+    raw_audio_retention_enabled: bool = _env_flag("RAW_AUDIO_RETENTION_ENABLED", True)
+    raw_audio_dir: str = os.getenv("RAW_AUDIO_DIR", "data/raw_audio")
+    custom_glossary_terms: str = os.getenv("CUSTOM_GLOSSARY_TERMS", "")
     default_asr_provider: str = os.getenv("DEFAULT_ASR_PROVIDER", "volcengine").strip().lower() or "volcengine"
 
     aliyun_asr_app_key: str = os.getenv("ALIYUN_ASR_APP_KEY", "")
@@ -148,6 +151,13 @@ class Settings:
     @property
     def resolved_meeting_history_db_path(self) -> Path:
         configured_path = Path(self.meeting_history_db_path)
+        if configured_path.is_absolute():
+            return configured_path
+        return PROJECT_ROOT / configured_path
+
+    @property
+    def resolved_raw_audio_dir(self) -> Path:
+        configured_path = Path(self.raw_audio_dir)
         if configured_path.is_absolute():
             return configured_path
         return PROJECT_ROOT / configured_path

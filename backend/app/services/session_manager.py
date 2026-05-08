@@ -14,6 +14,7 @@ from starlette.websockets import WebSocketState
 
 from app.clients.asr_base import ASRClient, ASRStream
 from app.core.config import Settings
+from app.schemas.glossary import GlossaryTerm
 from app.schemas.analysis import MeetingAnalysis
 from app.schemas.meeting_history import MeetingHistoryStatus, MeetingSourceType, SessionStarted
 from app.schemas.translation import TranscriptTranslation
@@ -22,6 +23,7 @@ from app.schemas.ws_message import SpeakerUpdate, WebSocketMessage, WebSocketMes
 from app.services.asr_provider_service import ASRProviderSelection, ASRProviderService
 from app.services.audio_codec_service import AudioCodecService
 from app.services.diarization_service import DiarizationService, DiarizationTurn
+from app.services.glossary_service import GlossaryService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService, RealtimeDiarizationSession
 from app.services.meeting_analysis_service import MeetingAnalysisService
@@ -43,6 +45,7 @@ class MeetingSession:
     asr_client: ASRClient
     should_run_diarization: bool
     should_run_realtime_diarization: bool
+    glossary_terms: list[GlossaryTerm] = field(default_factory=list)
     audio_queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     realtime_diarization_queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     translation_queue: asyncio.Queue[tuple[int, str] | None] = field(default_factory=asyncio.Queue)
@@ -85,6 +88,7 @@ class SessionManager:
         meeting_analysis_service: MeetingAnalysisService,
         translation_service: TranslationService,
         meeting_history_service: MeetingHistoryService,
+        glossary_service: GlossaryService,
     ) -> None:
         self._settings = settings
         self._asr_provider_service = asr_provider_service
@@ -96,6 +100,7 @@ class SessionManager:
         self._meeting_analysis_service = meeting_analysis_service
         self._translation_service = translation_service
         self._meeting_history_service = meeting_history_service
+        self._glossary_service = glossary_service
         self._sessions: dict[str, MeetingSession] = {}
 
     async def create_session(
@@ -104,9 +109,11 @@ class SessionManager:
         scene: str,
         target_lang: str | None,
         preferred_provider: str | None = None,
+        glossary_terms: str | None = None,
     ) -> MeetingSession:
         normalized_target_lang = self._translation_service.normalize_target_lang(target_lang)
         selection = self._asr_provider_service.resolve_provider(preferred_provider)
+        resolved_glossary_terms = self._glossary_service.resolve_terms(glossary_terms)
         session_id = uuid4().hex
         created_at = self._meeting_history_service.create_meeting(
             meeting_id=session_id,
@@ -114,6 +121,7 @@ class SessionManager:
             target_lang=normalized_target_lang,
             provider=selection.provider_name,
             source_type=MeetingSourceType.LIVE,
+            glossary_terms=resolved_glossary_terms,
         )
         session = MeetingSession(
             session_id=session_id,
@@ -125,6 +133,7 @@ class SessionManager:
             asr_client=selection.client,
             should_run_diarization=selection.should_run_diarization,
             should_run_realtime_diarization=selection.should_run_realtime_diarization,
+            glossary_terms=resolved_glossary_terms,
         )
         self._open_session_audio_writer(session)
         self._start_realtime_diarization(session)
@@ -563,7 +572,11 @@ class SessionManager:
             return
         if not self._summary_service.is_configured:
             await self._send_error(session, "DashScope is not configured; summary is empty.")
-        summary = await self._summary_service.generate_summary(session.transcripts, session.scene)
+        summary = await self._summary_service.generate_summary(
+            session.transcripts,
+            session.scene,
+            glossary_terms=session.glossary_terms,
+        )
         self._meeting_history_service.update_summary(session.session_id, summary)
         await self._send_message(
             session,
@@ -581,14 +594,12 @@ class SessionManager:
             return
         if not force and session.last_analysis_transcript_count == session.transcript_count:
             return
-        if not self._meeting_analysis_service.is_configured:
-            return
-
         session.analysis_in_progress = True
         try:
             analysis = await self._meeting_analysis_service.analyze_meeting(
                 session.transcripts,
                 session.scene,
+                glossary_terms=session.glossary_terms,
             )
             session.latest_analysis = analysis
             self._meeting_history_service.update_analysis(session.session_id, analysis)
@@ -628,6 +639,12 @@ class SessionManager:
         session: MeetingSession,
         transcript: TranscriptItem,
     ) -> None:
+        corrected = self._glossary_service.apply_to_transcripts([transcript], session.glossary_terms)[0]
+        if corrected.text != transcript.text:
+            session.transcripts[transcript.transcript_index] = corrected
+            self._meeting_history_service.upsert_transcript(session.session_id, corrected)
+            transcript = corrected
+            await self._send_transcript_update(session, corrected)
         if session.translation_worker_task is not None and session.target_lang:
             await session.translation_queue.put((transcript.transcript_index, transcript.text))
         if session.transcript_count % 3 == 0:

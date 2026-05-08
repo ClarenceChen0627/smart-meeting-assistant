@@ -66,6 +66,9 @@ cd backend
 - `AUDIO_SAMPLE_RATE`: PCM sample rate, default `16000`.
 - `AUDIO_CHANNELS`: audio channels, default `1`.
 - `MEETING_HISTORY_DB_PATH`: SQLite meeting history path.
+- `RAW_AUDIO_RETENTION_ENABLED`: allows user-requested raw upload retention, default `true`.
+- `RAW_AUDIO_DIR`: retained upload audio directory, default `data/raw_audio`.
+- `CUSTOM_GLOSSARY_TERMS`: optional default glossary. Use one term per line or `term=>replacement`.
 - `DEFAULT_ASR_PROVIDER`: `volcengine`, `dashscope`, or `demo`.
 - `DASHSCOPE_API_KEY`: DashScope key for ASR, translation, summary, and analysis.
 - `DASHSCOPE_MODEL`: chat model for summary and analysis.

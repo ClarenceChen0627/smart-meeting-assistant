@@ -151,3 +151,52 @@ def test_analysis_recalculates_signal_counts_from_final_highlights() -> None:
     assert analysis.signal_counts.disagreement == 1
     assert analysis.signal_counts.tension == 1
     assert analysis.signal_counts.hesitation == 0
+
+
+def test_analysis_adds_participant_rollups_from_highlights() -> None:
+    service = MeetingAnalysisService(
+        StubDashScopeClient(
+            """
+            {
+              "overall_sentiment": "mixed",
+              "engagement_level": "high",
+              "engagement_summary": "The meeting has several signals.",
+              "signal_counts": {"agreement": 1, "disagreement": 1, "tension": 0, "hesitation": 0},
+              "highlights": [
+                {
+                  "transcript_index": 0,
+                  "signal": "agreement",
+                  "severity": "medium",
+                  "reason": "Explicit agreement."
+                },
+                {
+                  "transcript_index": 1,
+                  "signal": "disagreement",
+                  "severity": "medium",
+                  "reason": "Explicit disagreement."
+                }
+              ]
+            }
+            """
+        )
+    )
+
+    analysis = asyncio.run(
+        service.analyze_meeting(
+            [
+                transcript(0, "I agree with the proposal."),
+                transcript(1, "I disagree with the launch date."),
+                transcript(2, "I will send the notes."),
+            ],
+            "general",
+        )
+    )
+
+    assert [participant.speaker for participant in analysis.participants] == [
+        "Speaker 1",
+        "Speaker 2",
+        "Speaker 3",
+    ]
+    assert analysis.participants[0].signal_counts.agreement == 1
+    assert analysis.participants[1].signal_counts.disagreement == 1
+    assert analysis.participants[2].signal_counts.agreement == 0

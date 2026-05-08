@@ -39,12 +39,23 @@ class MeetingAnalysisHighlight(BaseModel):
     reason: str
 
 
+class ParticipantAnalysis(BaseModel):
+    speaker: str
+    transcript_count: int = 0
+    speaking_time_seconds: float = 0.0
+    signal_counts: MeetingSignalCounts = Field(default_factory=MeetingSignalCounts)
+    sentiment: MeetingSentimentLevel = MeetingSentimentLevel.NEUTRAL
+    engagement_level: MeetingEngagementLevel = MeetingEngagementLevel.LOW
+    engagement_summary: str = ""
+
+
 class MeetingAnalysis(BaseModel):
     overall_sentiment: MeetingSentimentLevel = MeetingSentimentLevel.NEUTRAL
     engagement_level: MeetingEngagementLevel = MeetingEngagementLevel.LOW
     engagement_summary: str = ""
     signal_counts: MeetingSignalCounts = Field(default_factory=MeetingSignalCounts)
     highlights: list[MeetingAnalysisHighlight] = Field(default_factory=list)
+    participants: list[ParticipantAnalysis] = Field(default_factory=list)
 
     @classmethod
     def empty(cls) -> "MeetingAnalysis":
