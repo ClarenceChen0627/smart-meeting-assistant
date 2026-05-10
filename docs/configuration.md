@@ -68,6 +68,8 @@ cd backend
 - `MEETING_HISTORY_DB_PATH`: SQLite meeting history path.
 - `RAW_AUDIO_RETENTION_ENABLED`: allows user-requested raw upload retention, default `true`.
 - `RAW_AUDIO_DIR`: retained upload audio directory, default `data/raw_audio`.
+- `UPLOAD_QUEUE_DIR`: temporary persistent upload queue payload directory, default `data/upload_queue`.
+- `UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED`: starts an in-process upload queue worker with FastAPI by default. Set to `0` when running a separate worker with `tools/run_upload_worker.py`.
 - `CUSTOM_GLOSSARY_TERMS`: optional environment default glossary. Saved terms from `/api/glossary/terms` and per-meeting terms are merged before this fallback list. Use one term per line or `term=>replacement`.
 - `DEFAULT_ASR_PROVIDER`: `volcengine`, `dashscope`, or `demo`.
 - `DASHSCOPE_API_KEY`: DashScope key for ASR, translation, summary, and analysis.
@@ -103,6 +105,7 @@ cd backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+.\.venv\Scripts\python.exe tools\run_upload_worker.py --once
 ```
 
 ```bash
@@ -110,4 +113,5 @@ cd backend
 ./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ./.venv/Scripts/python.exe -m pytest
 ./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+./.venv/Scripts/python.exe tools/run_upload_worker.py --once
 ```

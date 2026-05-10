@@ -86,14 +86,15 @@ The product upload path is `POST /api/meetings/upload`.
 
 1. The frontend submits one audio file plus `scene`, `target_lang`, and `provider`.
 2. The backend creates a `processing` meeting record with `source_type=upload`.
-3. `UploadMeetingService` processes the file in a background task.
-4. Non-demo uploads are converted to WAV with ffmpeg.
-5. Demo uploads skip ffmpeg conversion and use deterministic transcript rows.
-6. ASR transcript rows are persisted first so the frontend can show partial progress.
-7. Translation, analysis, and summary are generated and persisted.
-8. The meeting is marked `finalized` on success or `failed` on unrecoverable errors.
+3. `UploadMeetingService` writes the upload payload to `UPLOAD_QUEUE_DIR` and records a SQLite `upload_jobs` row.
+4. The embedded upload worker claims queued jobs by default; `tools/run_upload_worker.py` can run the same worker out of process.
+5. Non-demo uploads are converted to WAV with ffmpeg.
+6. Demo uploads skip ffmpeg conversion and use deterministic transcript rows.
+7. ASR transcript rows are persisted first so the frontend can show partial progress.
+8. Translation, analysis, and summary are generated and persisted.
+9. The meeting is marked `finalized` on success or `failed` on unrecoverable errors, and the temporary queue payload is removed.
 
-The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, analysis, summary, and action items in the same workspace used by live meetings. Runtime ASR, analysis, and summary failures are retried once before the upload is marked failed. The frontend keeps the selected file in memory during the current page session so failed uploads can be submitted again without storing raw audio in meeting history.
+The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, analysis, summary, and action items in the same workspace used by live meetings. Runtime ASR, analysis, and summary failures are retried once before the upload is marked failed. The frontend keeps the selected file in memory during the current page session so failed uploads can be submitted again. Queue payload files are temporary processing inputs and are separate from user-requested raw audio retention.
 
 ## 7. Meeting History
 
@@ -143,6 +144,8 @@ Configuration is environment-variable driven. Important variables include:
 - `VOLCENGINE_ASR_APP_KEY` and `VOLCENGINE_ASR_ACCESS_KEY`: used by Volcengine ASR.
 - `DIARIZATION_MODE`: `disabled`, `offline`, or `hybrid`.
 - `MEETING_HISTORY_DB_PATH`: SQLite meeting history location.
+- `UPLOAD_QUEUE_DIR`: temporary upload queue payload directory.
+- `UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED`: controls whether FastAPI starts the embedded upload worker.
 
 `GET /api/health` reports `demoMode`, configured provider status, and available ASR providers.
 
@@ -181,7 +184,7 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 - Translation supports one target language per meeting.
 - Mobile background and lock-screen recording is still controlled by the operating system and browser; the frontend detects common interruptions but cannot guarantee capture while suspended.
 - Raw audio is not stored in meeting history.
-- Upload processing is async but still in-process; there is no distributed worker queue.
+- Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Advanced retry backoff and attempt governance are still future work.
 - Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.

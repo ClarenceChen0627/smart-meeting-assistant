@@ -66,6 +66,10 @@ cd backend
 - `AUDIO_SAMPLE_RATE`: PCM 采样率，默认 `16000`。
 - `AUDIO_CHANNELS`: 音频声道数，默认 `1`。
 - `MEETING_HISTORY_DB_PATH`: SQLite 会议历史路径。
+- `RAW_AUDIO_RETENTION_ENABLED`：允许用户主动留存上传原始音频，默认 `true`。
+- `RAW_AUDIO_DIR`：用户主动留存上传原始音频的目录，默认 `data/raw_audio`。
+- `UPLOAD_QUEUE_DIR`：持久上传队列的临时 payload 目录，默认 `data/upload_queue`。
+- `UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED`：默认随 FastAPI 启动内置上传 worker；设置为 `0` 后可用 `tools/run_upload_worker.py` 单独处理队列。
 - `CUSTOM_GLOSSARY_TERMS`: 可选环境默认术语表。`/api/glossary/terms` 保存的术语和单场会议术语会先合并，再使用这里的 fallback 列表。每行一个术语，或使用 `term=>replacement`。
 - `DEFAULT_ASR_PROVIDER`: `volcengine`、`dashscope` 或 `demo`。
 - `DASHSCOPE_API_KEY`: DashScope ASR、翻译、总结和分析使用的 key。
@@ -101,6 +105,7 @@ cd backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+.\.venv\Scripts\python.exe tools\run_upload_worker.py --once
 ```
 
 ```bash
@@ -108,4 +113,5 @@ cd backend
 ./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ./.venv/Scripts/python.exe -m pytest
 ./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+./.venv/Scripts/python.exe tools/run_upload_worker.py --once
 ```

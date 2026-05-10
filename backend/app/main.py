@@ -34,6 +34,7 @@ from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 from app.services.upload_meeting_service import UploadMeetingService
+from app.services.upload_queue_service import UploadQueueStore
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -61,6 +62,10 @@ async def lifespan(app: FastAPI):
     translation_service = TranslationService(dashscope_client)
     raw_audio_retention_service = RawAudioRetentionService(settings)
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    upload_queue_store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
     glossary_store_service = GlossaryStoreService(settings.resolved_meeting_history_db_path)
     glossary_service = GlossaryService(settings, glossary_store_service)
     upload_meeting_service = UploadMeetingService(
@@ -74,6 +79,8 @@ async def lifespan(app: FastAPI):
         meeting_history_service=meeting_history_service,
         glossary_service=glossary_service,
         raw_audio_retention_service=raw_audio_retention_service,
+        upload_queue_store=upload_queue_store,
+        embedded_worker_enabled=settings.upload_queue_embedded_worker_enabled,
     )
     session_manager = SessionManager(
         settings=settings,
@@ -106,6 +113,7 @@ async def lifespan(app: FastAPI):
     app.state.glossary_service = glossary_service
     app.state.glossary_store_service = glossary_store_service
     app.state.raw_audio_retention_service = raw_audio_retention_service
+    app.state.upload_queue_store = upload_queue_store
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service
     app.state.session_manager = session_manager
@@ -142,6 +150,11 @@ async def lifespan(app: FastAPI):
             )
     else:
         logger.info("Speaker diarization is disabled.")
+    if settings.upload_queue_embedded_worker_enabled:
+        upload_meeting_service.start_embedded_worker()
+        logger.info("Embedded upload queue worker is enabled.")
+    else:
+        logger.info("Embedded upload queue worker is disabled. Run tools/run_upload_worker.py to process uploads.")
 
     logger.info("Starting %s %s", settings.service_name, settings.service_version)
     yield

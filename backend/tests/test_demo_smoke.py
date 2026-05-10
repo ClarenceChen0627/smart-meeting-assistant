@@ -24,6 +24,7 @@ from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 from app.services.upload_meeting_service import UploadMeetingService
+from app.services.upload_queue_service import UploadQueueStore
 
 
 pytestmark = pytest.mark.smoke
@@ -69,6 +70,7 @@ def build_settings(tmp_path, **overrides) -> Settings:
     values = {
         "meeting_history_db_path": str(tmp_path / "meeting_history.sqlite3"),
         "raw_audio_dir": str(tmp_path / "raw_audio"),
+        "upload_queue_dir": str(tmp_path / "upload_queue"),
         "demo_mode": True,
         "default_asr_provider": "demo",
         "diarization_mode": "disabled",
@@ -246,6 +248,10 @@ def test_demo_upload_finalizes_without_ffmpeg_or_external_keys(tmp_path) -> None
         meeting_history_service=meeting_history_service,
         glossary_service=GlossaryService(settings),
         raw_audio_retention_service=RawAudioRetentionService(settings),
+        upload_queue_store=UploadQueueStore(
+            db_path=settings.resolved_meeting_history_db_path,
+            queue_dir=settings.resolved_upload_queue_dir,
+        ),
     )
     app = FastAPI()
     app.include_router(meetings_router)
