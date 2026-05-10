@@ -44,6 +44,9 @@ async def run_worker(*, once: bool) -> int:
     upload_queue_store = UploadQueueStore(
         db_path=settings.resolved_meeting_history_db_path,
         queue_dir=settings.resolved_upload_queue_dir,
+        max_attempts=settings.upload_queue_max_attempts,
+        retry_base_seconds=settings.upload_queue_retry_base_seconds,
+        retry_max_seconds=settings.upload_queue_retry_max_seconds,
     )
     upload_meeting_service = UploadMeetingService(
         asr_provider_service=ASRProviderService(
@@ -66,6 +69,7 @@ async def run_worker(*, once: bool) -> int:
         raw_audio_retention_service=RawAudioRetentionService(settings),
         upload_queue_store=upload_queue_store,
         embedded_worker_enabled=False,
+        upload_queue_processing_timeout_seconds=settings.upload_queue_processing_timeout_seconds,
     )
 
     try:

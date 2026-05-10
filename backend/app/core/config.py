@@ -64,6 +64,10 @@ class Settings:
     raw_audio_dir: str = os.getenv("RAW_AUDIO_DIR", "data/raw_audio")
     upload_queue_dir: str = os.getenv("UPLOAD_QUEUE_DIR", "data/upload_queue")
     upload_queue_embedded_worker_enabled: bool = _env_flag("UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED", True)
+    upload_queue_max_attempts: int = int(os.getenv("UPLOAD_QUEUE_MAX_ATTEMPTS", "3"))
+    upload_queue_retry_base_seconds: float = float(os.getenv("UPLOAD_QUEUE_RETRY_BASE_SECONDS", "30"))
+    upload_queue_retry_max_seconds: float = float(os.getenv("UPLOAD_QUEUE_RETRY_MAX_SECONDS", "300"))
+    upload_queue_processing_timeout_seconds: float = float(os.getenv("UPLOAD_QUEUE_PROCESSING_TIMEOUT_SECONDS", "1800"))
     custom_glossary_terms: str = os.getenv("CUSTOM_GLOSSARY_TERMS", "")
     default_asr_provider: str = os.getenv("DEFAULT_ASR_PROVIDER", "volcengine").strip().lower() or "volcengine"
 

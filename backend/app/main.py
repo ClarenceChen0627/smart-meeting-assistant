@@ -65,6 +65,9 @@ async def lifespan(app: FastAPI):
     upload_queue_store = UploadQueueStore(
         db_path=settings.resolved_meeting_history_db_path,
         queue_dir=settings.resolved_upload_queue_dir,
+        max_attempts=settings.upload_queue_max_attempts,
+        retry_base_seconds=settings.upload_queue_retry_base_seconds,
+        retry_max_seconds=settings.upload_queue_retry_max_seconds,
     )
     glossary_store_service = GlossaryStoreService(settings.resolved_meeting_history_db_path)
     glossary_service = GlossaryService(settings, glossary_store_service)
@@ -81,6 +84,7 @@ async def lifespan(app: FastAPI):
         raw_audio_retention_service=raw_audio_retention_service,
         upload_queue_store=upload_queue_store,
         embedded_worker_enabled=settings.upload_queue_embedded_worker_enabled,
+        upload_queue_processing_timeout_seconds=settings.upload_queue_processing_timeout_seconds,
     )
     session_manager = SessionManager(
         settings=settings,

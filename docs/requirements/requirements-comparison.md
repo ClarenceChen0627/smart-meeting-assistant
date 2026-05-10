@@ -38,7 +38,7 @@ The project now satisfies all five baseline requirements and extends them with l
 - Live rolling summaries are provisional and not persisted; the saved final summary is generated after finalize or upload completion.
 - Translation supports one target language per meeting.
 - Raw audio files are not stored in meeting history.
-- Upload processing uses a SQLite-backed persistent queue with an embedded worker by default; advanced retry governance is still future work.
+- Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs have bounded retry, backoff, and stale recovery; broader observability is still future work.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.
 
