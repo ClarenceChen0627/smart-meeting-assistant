@@ -178,7 +178,7 @@ docker-compose up --build
 
 - Hybrid 实时 diarization 的 speaker label 是临时结果，finalize 后的 pyannote 结果才是最终准结果。
 - Volcengine 原生 speaker clustering 只作用于 Volcengine ASR provider 路径。
-- Summary 只在 `finalize` 后生成，不在会议中持续刷新。
+- 会中 rolling summary 是临时结果；最终保存的 summary 仍在 `finalize` 后生成。
 - 实时 ASR 在术语表纠错前仍可能误识别技术术语。
 - 移动端后台和锁屏录音仍受操作系统与浏览器限制；前端会检测常见中断并提示用户。
 - Upload processing 使用进程内 worker queue；分布式 worker queue 仍不在当前范围内。
@@ -186,7 +186,7 @@ docker-compose up --build
 ## Roadmap
 
 - 短期：真实会议上传质量评估包已建立，支持私有音频 manifest、本地 provider 运行、自动检查和人工复核报告。
-- 中期：提升真实会议准确率和可修正性，包括持久化术语表、speaker 重命名 / 合并、移动端录音稳定性和会中滚动摘要。
+- 中期：真实会议准确率和可修正性能力已实现，包括持久化术语表、speaker 重命名 / 合并、移动端录音稳定性和会中滚动摘要。
 - 长期：面向生产使用补强质量治理和运行可靠性，包括 provider 质量 / 成本评估、分布式上传队列、任务恢复、可观测性和编辑审计历史。
 
 ## License

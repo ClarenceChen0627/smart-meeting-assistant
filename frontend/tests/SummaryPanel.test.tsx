@@ -78,6 +78,22 @@ describe('SummaryPanel', () => {
     expect(screen.getByText(/no concise meeting summary was generated/i)).toBeInTheDocument();
   });
 
+  it('marks provisional live summaries and hides saved-meeting actions', () => {
+    render(
+      <SummaryPanel
+        summary={summary}
+        transcripts={transcripts}
+        meetingId="meeting-1"
+        isProvisional
+        onSaveSummary={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/live rolling summary/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /export notes/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /edit summary/i })).not.toBeInTheDocument();
+  });
+
   it('keeps edit and save behavior', async () => {
     const user = userEvent.setup();
     const onSaveSummary = vi.fn<(_: string, update: MeetingSummaryUpdate) => Promise<void>>()

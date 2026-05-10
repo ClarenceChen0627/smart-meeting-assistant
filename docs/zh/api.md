@@ -219,7 +219,27 @@ ws://localhost:8080/ws/meeting?scene=general&provider=dashscope&glossary_terms=q
 }
 ```
 
+### `rolling_summary`
+
+`rolling_summary` 是仅用于 live 会中的临时滚动摘要。它复用 `MeetingSummary` 数据结构，在至少 3 条 final transcript 后开始生成，之后每新增 3 条 final transcript 且距离上次请求至少 60 秒才会再次触发。它不会写入 `summary_json`；最终 `summary` 事件仍然是权威结果。
+
+```json
+{
+  "type": "rolling_summary",
+  "data": {
+    "title": "Launch Plan Review",
+    "overview": "The team is aligning on the launch plan so far.",
+    "key_topics": ["Launch plan"],
+    "decisions": [],
+    "action_items": [],
+    "risks": []
+  }
+}
+```
+
 ### `summary`
+
+最终 `summary` 事件在 live `finalize` 后或上传处理完成后发送，并写入会议记录。
 
 ```json
 {

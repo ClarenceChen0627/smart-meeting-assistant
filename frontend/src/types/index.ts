@@ -181,7 +181,7 @@ export interface MeetingRecord extends MeetingHistoryListItem {
 }
 
 export interface WebSocketMessage {
-  type: 'session_started' | 'transcript' | 'transcript_update' | 'speaker_update' | 'translation' | 'analysis' | 'summary' | 'error'
+  type: 'session_started' | 'transcript' | 'transcript_update' | 'speaker_update' | 'translation' | 'analysis' | 'rolling_summary' | 'summary' | 'error'
   data: SessionStarted | TranscriptItem | SpeakerUpdate | TranscriptTranslation | MeetingAnalysis | MeetingSummary | string
 }
 

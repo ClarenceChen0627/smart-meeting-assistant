@@ -179,7 +179,7 @@ docker-compose up --build
 
 - Hybrid realtime diarization labels are provisional until final pyannote confirmation.
 - Volcengine native speaker clustering applies only to the Volcengine ASR provider path.
-- Summary is generated after `finalize`, not continuously refreshed during the meeting.
+- Live rolling summaries are provisional; the final saved summary is generated after `finalize`.
 - Realtime ASR can still misrecognize technical terms before glossary correction runs.
 - Mobile background and lock-screen recording remains limited by the operating system and browser; the frontend detects common interruptions and warns the user.
 - Upload processing uses an in-process worker queue; distributed workers are still out of scope.
@@ -187,7 +187,7 @@ docker-compose up --build
 ## Roadmap
 
 - Short term: real-meeting upload quality evaluation package is established for private audio manifests, local provider runs, automated checks, and manual review reports.
-- Medium term: improve real-meeting accuracy and correction workflows, including persistent glossaries, speaker rename/merge, mobile recording reliability, and rolling in-meeting summaries.
+- Medium term: real-meeting accuracy and correction workflows are implemented, including persistent glossaries, speaker rename/merge, mobile recording reliability, and rolling in-meeting summaries.
 - Long term: strengthen quality governance and production reliability with provider quality/cost evaluation, distributed upload queues, task recovery, observability, and edit audit history.
 
 ## License

@@ -17,7 +17,7 @@ The project now satisfies all five baseline requirements and extends them with l
 | Baseline requirement | Current implementation | Status |
 | --- | --- | --- |
 | Real-time Speech-to-Text Transcription | Browser microphone capture, WebSocket audio streaming, Volcengine/DashScope/demo ASR providers, live transcripts, speaker updates, and finalize-time diarization | Complete |
-| Automatic Meeting Summarization | Structured summary after live finalize or upload completion, including title, overview, topics, decisions, risks, and action items | Complete |
+| Automatic Meeting Summarization | Provisional rolling summaries during live meetings plus structured final summary after live finalize or upload completion, including title, overview, topics, decisions, risks, and action items | Complete |
 | Machine Translation for Multilingual Meetings | Transcript translation into 10 target languages, with deterministic demo translation for local runs | Complete |
 | Context-Aware Action Item Extraction | Structured action items with owner, deadline, source excerpt, confidence, explicitness metadata, and editable status/content | Complete |
 | Meeting Sentiment and Engagement Analysis | Meeting-level sentiment / engagement analysis, signal counts, and transcript highlights | Complete |
@@ -35,7 +35,7 @@ The project now satisfies all five baseline requirements and extends them with l
 
 ## Current Limitations
 
-- Summary is generated after finalize or upload completion, not continuously during a live meeting.
+- Live rolling summaries are provisional and not persisted; the saved final summary is generated after finalize or upload completion.
 - Translation supports one target language per meeting.
 - Raw audio files are not stored in meeting history.
 - Upload processing is async but still in-process; there is no distributed worker queue.

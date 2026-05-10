@@ -15,6 +15,7 @@ interface SummaryPanelProps {
   meetingDate?: string | null;
   meetingId?: string | null;
   meetingTitle?: string | null;
+  isProvisional?: boolean;
   isSaving?: boolean;
   onSaveSummary?: (meetingId: string, summary: MeetingSummaryUpdate) => Promise<void> | void;
   onSaveError?: (message: string) => void;
@@ -260,6 +261,7 @@ export function SummaryPanel({
   meetingDate,
   meetingId,
   meetingTitle,
+  isProvisional = false,
   isSaving = false,
   onSaveSummary,
   onSaveError,
@@ -292,7 +294,7 @@ export function SummaryPanel({
     summary.risks.length > 0 ||
     displayedActionItems.length > 0;
 
-  const canEdit = Boolean(meetingId && onSaveSummary);
+  const canEdit = Boolean(!isProvisional && meetingId && onSaveSummary);
 
   const startEditing = () => {
     setDraft(toDraft(summary));
@@ -434,15 +436,22 @@ export function SummaryPanel({
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={exportNotes}
-          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
-        >
-          <Download className="h-4 w-4" />
-          <span>Export Notes</span>
-        </button>
+      <div className="flex flex-wrap justify-end gap-2">
+        {isProvisional && (
+          <span className="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+            Live rolling summary
+          </span>
+        )}
+        {!isProvisional && (
+          <button
+            type="button"
+            onClick={exportNotes}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            <Download className="h-4 w-4" />
+            <span>Export Notes</span>
+          </button>
+        )}
         {canEdit && (
           <button
             type="button"

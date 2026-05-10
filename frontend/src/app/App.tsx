@@ -155,6 +155,7 @@ export default function App() {
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
   const [summary, setSummary] = useState<MeetingSummary | null>(null);
+  const [isRollingSummary, setIsRollingSummary] = useState(false);
 
   const [historyList, setHistoryList] = useState<MeetingHistoryListItem[]>([]);
   const [historyMeeting, setHistoryMeeting] = useState<MeetingRecord | null>(null);
@@ -174,6 +175,7 @@ export default function App() {
     setTranscripts([]);
     setAnalysis(null);
     setSummary(null);
+    setIsRollingSummary(false);
   };
 
   const updateHistoryFromMeeting = (meeting: MeetingRecord) => {
@@ -397,8 +399,13 @@ export default function App() {
       setAnalysis(data);
       setTranscripts((prev) => decorateTranscriptsWithAnalysis(prev, data));
     },
+    onRollingSummary: (data) => {
+      setSummary(data);
+      setIsRollingSummary(true);
+    },
     onSummary: (data) => {
       setSummary(data);
+      setIsRollingSummary(false);
       void loadHistoryList();
     },
     onError: (message) => {
@@ -809,6 +816,7 @@ export default function App() {
       )
     : transcripts;
   const displayedSummary = displayedMeeting?.summary ?? (displayedMeeting ? null : summary);
+  const isDisplayedSummaryProvisional = !displayedMeeting && inputMode === 'live' && isRollingSummary;
   const displayedAnalysis = displayedMeeting?.analysis ?? (displayedMeeting ? null : analysis);
   const displayedLanguage = displayedMeeting?.target_lang ?? currentLanguage;
   const displayedMeetingDate = displayedMeeting?.created_at ?? null;
@@ -830,7 +838,7 @@ export default function App() {
     && (
       displayedMeeting
         ? displayedMeeting.status === 'finalized' || displayedMeeting.status === 'failed'
-        : Boolean(currentMeetingId && summary)
+        : Boolean(currentMeetingId && summary && !isRollingSummary)
     )
   );
   const canRetryUpload = Boolean(
@@ -1156,6 +1164,7 @@ export default function App() {
               meetingDate={displayedMeetingDate}
               meetingId={summaryMeetingId}
               meetingTitle={displayedMeetingTitle}
+              isProvisional={isDisplayedSummaryProvisional}
               isSaving={isSavingSummary}
               onSaveSummary={(meetingId, nextSummary) => handleSummarySave(meetingId, nextSummary)}
               onSaveError={setServerError}

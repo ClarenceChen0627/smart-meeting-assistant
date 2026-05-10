@@ -17,6 +17,7 @@ export interface UseWebSocketOptions {
   onSpeakerUpdate: (data: SpeakerUpdate) => void;
   onTranslation: (data: TranscriptTranslation) => void;
   onAnalysis: (data: MeetingAnalysis) => void;
+  onRollingSummary: (data: MeetingSummary) => void;
   onSummary: (data: MeetingSummary) => void;
   onError?: (message: string) => void;
   onStatusChange?: (message: string) => void;
@@ -104,6 +105,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
               optionsRef.current.onTranslation(message.data as TranscriptTranslation);
             } else if (message.type === 'analysis') {
               optionsRef.current.onAnalysis(message.data as MeetingAnalysis);
+            } else if (message.type === 'rolling_summary') {
+              optionsRef.current.onRollingSummary(message.data as MeetingSummary);
             } else if (message.type === 'summary') {
               optionsRef.current.onSummary(message.data as MeetingSummary);
             } else if (message.type === 'error') {
