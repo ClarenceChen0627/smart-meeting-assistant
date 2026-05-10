@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from tools.evaluate_upload_quality import (
     build_json_report,
     evaluate_meeting_record,
     parse_manifest,
+    parse_manifest_document,
     render_markdown_report,
 )
 
@@ -74,6 +76,75 @@ def test_parse_manifest_reports_missing_audio(tmp_path: Path) -> None:
 
     with pytest.raises(ManifestError, match="does not exist"):
         parse_manifest(manifest_path)
+
+
+def test_parse_manifest_expands_provider_matrix_and_cost_profiles(tmp_path: Path) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio_file = audio_dir / "meeting.wav"
+    _write_silent_wav(audio_file, duration_seconds=1.5)
+    manifest_path = tmp_path / "upload-quality.local.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "cost_profiles": {
+                    "volcengine": {
+                        "currency": "CNY",
+                        "asr_per_audio_minute": 0.12,
+                    },
+                    "dashscope": {
+                        "currency": "CNY",
+                        "asr_per_audio_minute": 0.2,
+                    },
+                },
+                "cases": [
+                    {
+                        "id": "provider-comparison",
+                        "audio_path": "audio/meeting.wav",
+                        "providers": ["Volcengine", "dashscope", "dashscope"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = parse_manifest_document(manifest_path)
+
+    assert [case.provider for case in manifest.cases] == ["volcengine", "dashscope"]
+    assert manifest.cases[0].audio_duration_seconds == pytest.approx(1.5)
+    assert manifest.cost_profiles["volcengine"].currency == "CNY"
+    assert manifest.cost_profiles["dashscope"].asr_per_audio_minute == 0.2
+
+
+def test_parse_manifest_prefers_providers_over_single_provider_and_allows_duration_override(tmp_path: Path) -> None:
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio_file = audio_dir / "meeting.wav"
+    _write_silent_wav(audio_file, duration_seconds=1.0)
+    manifest_path = tmp_path / "upload-quality.local.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "id": "provider-comparison",
+                        "audio_path": "audio/meeting.wav",
+                        "provider": "dashscope",
+                        "providers": ["volcengine"],
+                        "audio_duration_seconds": 42.0,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cases = parse_manifest(manifest_path)
+
+    assert len(cases) == 1
+    assert cases[0].provider == "volcengine"
+    assert cases[0].audio_duration_seconds == 42.0
 
 
 def test_evaluate_meeting_record_checks_upload_quality_signals(tmp_path: Path) -> None:
@@ -234,3 +305,66 @@ def test_report_uses_audio_filename_and_manual_review_without_absolute_paths(tmp
     assert "meeting.wav" in report_json
     assert "Manual review" in markdown
     assert "Transcript accuracy" in markdown
+
+
+def test_report_summarizes_provider_quality_latency_and_cost() -> None:
+    results = [
+        CaseResult(
+            case_id="case-1",
+            audio_filename="meeting.wav",
+            scene="general",
+            requested_provider="dashscope",
+            target_lang=None,
+            status="finalized",
+            meeting_id="meeting-1",
+            actual_provider="dashscope",
+            checks=[CheckResult("status", True, "ok")],
+            metrics={"wer": 0.1, "cer": 0.05},
+            latency_seconds=10.0,
+            audio_duration_seconds=30.0,
+            estimated_asr_cost=0.1,
+            cost_currency="CNY",
+            cost_status="estimated",
+        ),
+        CaseResult(
+            case_id="case-1",
+            audio_filename="meeting.wav",
+            scene="general",
+            requested_provider="volcengine",
+            target_lang=None,
+            status="failed",
+            meeting_id="meeting-2",
+            actual_provider="volcengine",
+            checks=[CheckResult("status", False, "failed")],
+            latency_seconds=20.0,
+            audio_duration_seconds=30.0,
+            estimated_asr_cost=0.05,
+            cost_currency="CNY",
+            cost_status="estimated",
+        ),
+    ]
+
+    report = build_json_report(
+        results,
+        api_base_url="http://localhost:8080",
+        generated_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
+    )
+    markdown = render_markdown_report(report)
+
+    provider_summary = {item["provider"]: item for item in report["provider_summary"]}
+    assert provider_summary["dashscope"]["pass_rate"] == 1.0
+    assert provider_summary["dashscope"]["average_wer"] == 0.1
+    assert provider_summary["dashscope"]["total_estimated_asr_cost"] == 0.1
+    assert provider_summary["volcengine"]["pass_rate"] == 0.0
+    assert "Provider Comparison" in markdown
+    assert "0.1000 CNY" in markdown
+
+
+def _write_silent_wav(path: Path, *, duration_seconds: float) -> None:
+    sample_rate = 16000
+    frame_count = int(sample_rate * duration_seconds)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)

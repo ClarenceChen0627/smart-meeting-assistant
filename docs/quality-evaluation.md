@@ -8,16 +8,18 @@ Use the upload quality evaluator to run repeatable local checks against real pro
 
 ## What It Checks
 
-The first version covers the upload meeting workflow. Each manifest case can verify:
+The evaluator covers the upload meeting workflow. Each manifest case can verify:
 
 - upload completion status and unexpected provider fallback
+- the same audio across multiple providers for quality / cost comparison
 - transcript row count and required / forbidden terminology
 - speaker count and final speaker labels
 - translated transcript fields for the selected target language
 - non-empty summary, action items, and analysis
 - optional WER / CER against a human-reviewed reference transcript
+- latency, audio duration, and locally configured ASR cost estimates
 
-The generated Markdown report includes manual review fields for quality judgments that should not be reduced to a simple automated score, such as speaker reasonableness and summary usefulness.
+The generated Markdown report includes a provider comparison table and manual review fields for quality judgments that should not be reduced to a simple automated score, such as speaker reasonableness and summary usefulness.
 
 ## Prepare Private Data
 
@@ -63,9 +65,26 @@ The evaluator writes a timestamped report directory containing:
 - `audio_path`: private audio path, absolute or relative to the manifest file.
 - `scene`: meeting scene, such as `general`, `finance`, or `hr`.
 - `provider`: expected ASR provider, such as `volcengine` or `dashscope`.
+- `providers`: optional provider matrix. When present, the evaluator runs the same case once per provider and prefers this over `provider`.
 - `target_lang`: optional translation target.
 - `glossary_terms`: string or array of terms; entries can use `term=>replacement`.
+- `audio_duration_seconds`: optional duration override for non-WAV files or trimmed reference windows. WAV duration is detected automatically when possible.
 - `allow_provider_fallback`: defaults to `false` so accidental demo fallback fails the run.
 - `expected`: automated checks, including transcript count, terminology, speakers, translations, summary, action items, analysis, and optional WER / CER thresholds.
+
+Top-level `cost_profiles` can estimate ASR cost:
+
+```json
+{
+  "cost_profiles": {
+    "volcengine": {
+      "currency": "CNY",
+      "asr_per_audio_minute": 0.12
+    }
+  }
+}
+```
+
+The evaluator never hard-codes provider prices. Keep these values in your local manifest and update them from your own billing assumptions. Cost estimates are for comparison only and may not match provider invoices.
 
 The evaluator does not start FastAPI and does not run in CI by default.
