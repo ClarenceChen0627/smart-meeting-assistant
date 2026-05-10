@@ -159,7 +159,7 @@ docker-compose up --build
 
 - [Architecture](docs/architecture.md)：系统总览、实时流程、上传流程和会议状态图。
 - [Configuration](docs/configuration.md)：demo 模式、provider 变量、前端覆盖配置和最小配置矩阵。
-- [质量评估](docs/zh/quality-evaluation.md)：使用私有音频 manifest 和复核报告，在本地评估真实 provider 的上传会议质量。
+- [质量评估](docs/zh/quality-evaluation.md)：使用私有音频 manifest、provider 对比、成本估算和复核报告，在本地评估真实上传会议质量。
 - [移动端浏览器测试](docs/zh/mobile-testing.md)：手机验收时的局域网、HTTPS、麦克风和 WebSocket 注意事项。
 - [API Reference](docs/api.md)：HTTP 接口、WebSocket 消息和 meeting record 字段。
 - [Speaker Diarization](docs/diarization.md)：offline / hybrid diarization 配置。

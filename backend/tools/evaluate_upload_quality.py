@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import mimetypes
 import re
 import time
+import wave
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +44,13 @@ class ExpectedChecks:
 
 
 @dataclass(frozen=True)
+class CostProfile:
+    provider: str
+    currency: str
+    asr_per_audio_minute: float
+
+
+@dataclass(frozen=True)
 class EvaluationCase:
     case_id: str
     audio_path: Path
@@ -50,11 +59,18 @@ class EvaluationCase:
     target_lang: str | None = None
     glossary_terms: str = ""
     allow_provider_fallback: bool = False
+    audio_duration_seconds: float | None = None
     expected: ExpectedChecks = field(default_factory=ExpectedChecks)
 
     @property
     def audio_filename(self) -> str:
         return self.audio_path.name
+
+
+@dataclass(frozen=True)
+class EvaluationManifest:
+    cases: list[EvaluationCase]
+    cost_profiles: dict[str, CostProfile] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -78,6 +94,11 @@ class CaseResult:
     checks: list[CheckResult]
     metrics: dict[str, float] = field(default_factory=dict)
     meeting_record_file: str | None = None
+    latency_seconds: float | None = None
+    audio_duration_seconds: float | None = None
+    estimated_asr_cost: float | None = None
+    cost_currency: str | None = None
+    cost_status: str = "not_configured"
 
     @property
     def passed(self) -> bool:
@@ -85,6 +106,10 @@ class CaseResult:
 
 
 def parse_manifest(manifest_path: Path, *, validate_audio_exists: bool = True) -> list[EvaluationCase]:
+    return parse_manifest_document(manifest_path, validate_audio_exists=validate_audio_exists).cases
+
+
+def parse_manifest_document(manifest_path: Path, *, validate_audio_exists: bool = True) -> EvaluationManifest:
     manifest_path = manifest_path.resolve()
     try:
         raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -94,6 +119,7 @@ def parse_manifest(manifest_path: Path, *, validate_audio_exists: bool = True) -
         raise ManifestError(f"Manifest is not valid JSON: {exc}") from exc
 
     manifest = _as_mapping(raw_manifest, "manifest")
+    cost_profiles = _parse_cost_profiles(manifest.get("cost_profiles", {}))
     raw_cases = manifest.get("cases")
     if not isinstance(raw_cases, list) or not raw_cases:
         raise ManifestError("Manifest must contain a non-empty 'cases' array.")
@@ -114,21 +140,25 @@ def parse_manifest(manifest_path: Path, *, validate_audio_exists: bool = True) -
             raise ManifestError(f"Audio file for case '{case_id}' does not exist: {audio_path}")
 
         expected = _parse_expected_checks(case_data.get("expected", {}), case_id)
-        cases.append(
-            EvaluationCase(
-                case_id=case_id,
-                audio_path=audio_path,
-                scene=str(case_data.get("scene", "general") or "general"),
-                provider=_optional_str(case_data.get("provider")),
-                target_lang=_optional_str(case_data.get("target_lang")),
-                glossary_terms=_parse_glossary_terms(case_data.get("glossary_terms", "")),
-                allow_provider_fallback=bool(
-                    case_data.get("allow_provider_fallback", default_allow_fallback)
-                ),
-                expected=expected,
+        providers = _parse_case_providers(case_data, case_id)
+        audio_duration_seconds = _resolve_audio_duration_seconds(case_data, case_id, audio_path)
+        for provider in providers:
+            cases.append(
+                EvaluationCase(
+                    case_id=case_id,
+                    audio_path=audio_path,
+                    scene=str(case_data.get("scene", "general") or "general"),
+                    provider=provider,
+                    target_lang=_optional_str(case_data.get("target_lang")),
+                    glossary_terms=_parse_glossary_terms(case_data.get("glossary_terms", "")),
+                    allow_provider_fallback=bool(
+                        case_data.get("allow_provider_fallback", default_allow_fallback)
+                    ),
+                    audio_duration_seconds=audio_duration_seconds,
+                    expected=expected,
+                )
             )
-        )
-    return cases
+    return EvaluationManifest(cases=cases, cost_profiles=cost_profiles)
 
 
 def evaluate_meeting_record(case: EvaluationCase, meeting: dict[str, Any]) -> CaseResult:
@@ -339,6 +369,7 @@ def build_json_report(
             "passed": passed_count,
             "failed": len(results) - passed_count,
         },
+        "provider_summary": _build_provider_summary(results),
         "cases": [_case_result_to_json(result) for result in results],
     }
 
@@ -354,14 +385,37 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- Passed: {summary['passed']}",
         f"- Failed: {summary['failed']}",
         "",
+        "## Provider Comparison",
+        "",
+        "| Provider | Runs | Passed | Pass rate | Avg WER | Avg CER | Avg latency | Total ASR cost | Cost / passed |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for provider in report.get("provider_summary", []):
+        lines.append(
+            "| "
+            f"`{provider['provider']}` | "
+            f"{provider['runs']} | "
+            f"{provider['passed']} | "
+            f"{_format_percent(provider.get('pass_rate'))} | "
+            f"{_format_float(provider.get('average_wer'))} | "
+            f"{_format_float(provider.get('average_cer'))} | "
+            f"{_format_seconds(provider.get('average_latency_seconds'))} | "
+            f"{_format_money(provider.get('total_estimated_asr_cost'), provider.get('cost_currency'))} | "
+            f"{_format_money(provider.get('cost_per_passed_case'), provider.get('cost_currency'))} |"
+        )
+    lines.extend(
+        [
+            "",
         "## Cases",
         "",
-    ]
+        ]
+    )
     for case in report["cases"]:
         result_label = "PASS" if case["passed"] else "FAIL"
+        provider_label = case["requested_provider"] or "default"
         lines.extend(
             [
-                f"### {case['id']} - {result_label}",
+                f"### {case['id']} / {provider_label} - {result_label}",
                 "",
                 f"- Audio: `{case['audio_filename']}`",
                 f"- Scene: `{case['scene']}`",
@@ -369,6 +423,9 @@ def render_markdown_report(report: dict[str, Any]) -> str:
                 f"- Target language: `{case['target_lang'] or 'none'}`",
                 f"- Meeting ID: `{case['meeting_id'] or 'none'}`",
                 f"- Status: `{case['status'] or 'unknown'}`",
+                f"- Latency: {_format_seconds(case.get('latency_seconds'))}",
+                f"- Audio duration: {_format_seconds(case.get('audio_duration_seconds'))}",
+                f"- Estimated ASR cost: {_format_money(case.get('estimated_asr_cost'), case.get('cost_currency'))} ({case.get('cost_status', 'not_configured')})",
             ]
         )
         if case.get("metrics"):
@@ -421,6 +478,7 @@ def run_case(
     case_output_dir: Path,
     poll_interval_seconds: float,
     timeout_seconds: float,
+    cost_profiles: dict[str, CostProfile] | None = None,
 ) -> CaseResult:
     upload_url = f"{api_base_url.rstrip('/')}/api/meetings/upload"
     mime_type = mimetypes.guess_type(case.audio_path.name)[0] or "application/octet-stream"
@@ -435,6 +493,7 @@ def run_case(
     if case.glossary_terms:
         data["glossary_terms"] = case.glossary_terms
 
+    started_at = time.monotonic()
     try:
         with case.audio_path.open("rb") as audio_file:
             response = client.post(
@@ -443,23 +502,43 @@ def run_case(
                 files={"file": (case.audio_path.name, audio_file, mime_type)},
             )
     except httpx.HTTPError as exc:
-        return _case_error_result(case, "upload_request", f"Upload request failed: {exc}")
+        return _case_error_result(
+            case,
+            "upload_request",
+            f"Upload request failed: {exc}",
+            latency_seconds=time.monotonic() - started_at,
+            cost_profiles=cost_profiles,
+        )
 
     if response.status_code != 202:
         return _case_error_result(
             case,
             "upload_response",
             f"Expected upload HTTP 202, got {response.status_code}: {response.text[:500]}",
+            latency_seconds=time.monotonic() - started_at,
+            cost_profiles=cost_profiles,
         )
 
     try:
         initial_record = response.json()
     except ValueError as exc:
-        return _case_error_result(case, "upload_response_json", f"Upload response was not valid JSON: {exc}")
+        return _case_error_result(
+            case,
+            "upload_response_json",
+            f"Upload response was not valid JSON: {exc}",
+            latency_seconds=time.monotonic() - started_at,
+            cost_profiles=cost_profiles,
+        )
 
     meeting_id = initial_record.get("meeting_id")
     if not meeting_id:
-        return _case_error_result(case, "meeting_id", "Upload response did not include meeting_id.")
+        return _case_error_result(
+            case,
+            "meeting_id",
+            "Upload response did not include meeting_id.",
+            latency_seconds=time.monotonic() - started_at,
+            cost_profiles=cost_profiles,
+        )
 
     try:
         meeting = _poll_meeting(
@@ -470,22 +549,42 @@ def run_case(
             timeout_seconds=timeout_seconds,
         )
     except httpx.HTTPError as exc:
-        return _case_error_result(case, "poll_request", f"Meeting polling failed: {exc}")
+        return _case_error_result(
+            case,
+            "poll_request",
+            f"Meeting polling failed: {exc}",
+            latency_seconds=time.monotonic() - started_at,
+            cost_profiles=cost_profiles,
+        )
     except ValueError as exc:
-        return _case_error_result(case, "poll_response_json", f"Meeting polling returned invalid JSON: {exc}")
+        return _case_error_result(
+            case,
+            "poll_response_json",
+            f"Meeting polling returned invalid JSON: {exc}",
+            latency_seconds=time.monotonic() - started_at,
+            cost_profiles=cost_profiles,
+        )
+    latency_seconds = time.monotonic() - started_at
     if meeting is None:
         return _case_error_result(
             case,
             "poll_timeout",
             f"Meeting '{meeting_id}' did not reach a final status within {timeout_seconds:.0f}s.",
+            latency_seconds=latency_seconds,
+            cost_profiles=cost_profiles,
         )
 
     case_output_dir.mkdir(parents=True, exist_ok=True)
-    record_file_name = f"{_safe_filename(case.case_id)}.meeting.json"
+    record_file_name = f"{_safe_filename(case.case_id)}.{_safe_filename(case.provider or 'default')}.meeting.json"
     record_path = case_output_dir / record_file_name
     record_path.write_text(json.dumps(meeting, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     result = evaluate_meeting_record(case, meeting)
+    cost = _estimate_asr_cost(
+        provider=result.actual_provider or result.requested_provider,
+        audio_duration_seconds=case.audio_duration_seconds,
+        cost_profiles=cost_profiles or {},
+    )
     return CaseResult(
         case_id=result.case_id,
         audio_filename=result.audio_filename,
@@ -498,6 +597,11 @@ def run_case(
         checks=result.checks,
         metrics=result.metrics,
         meeting_record_file=f"cases/{record_file_name}",
+        latency_seconds=latency_seconds,
+        audio_duration_seconds=case.audio_duration_seconds,
+        estimated_asr_cost=cost["amount"],
+        cost_currency=cost["currency"],
+        cost_status=cost["status"],
     )
 
 
@@ -508,6 +612,7 @@ def run_evaluation(
     output_dir: Path,
     poll_interval_seconds: float,
     timeout_seconds: float,
+    cost_profiles: dict[str, CostProfile] | None = None,
 ) -> tuple[list[CaseResult], Path, Path]:
     run_dir = output_dir / datetime.now(timezone.utc).strftime("upload-quality-%Y%m%d-%H%M%S")
     case_output_dir = run_dir / "cases"
@@ -522,6 +627,7 @@ def run_evaluation(
                     case_output_dir=case_output_dir,
                     poll_interval_seconds=poll_interval_seconds,
                     timeout_seconds=timeout_seconds,
+                    cost_profiles=cost_profiles,
                 )
             )
     json_path, markdown_path = write_reports(results, output_dir=run_dir, api_base_url=api_base_url)
@@ -538,13 +644,14 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        cases = parse_manifest(args.manifest)
+        manifest = parse_manifest_document(args.manifest)
         results, json_path, markdown_path = run_evaluation(
-            cases,
+            manifest.cases,
             api_base_url=args.api_base_url,
             output_dir=args.output_dir,
             poll_interval_seconds=args.poll_interval_seconds,
             timeout_seconds=args.timeout_seconds,
+            cost_profiles=manifest.cost_profiles,
         )
     except EvaluationError as exc:
         print(f"Evaluation failed: {exc}")
@@ -576,6 +683,77 @@ def _parse_expected_checks(value: Any, case_id: str) -> ExpectedChecks:
     )
 
 
+def _parse_case_providers(case_data: dict[str, Any], case_id: str) -> list[str | None]:
+    providers_value = case_data.get("providers")
+    if providers_value is not None:
+        providers = _str_list(providers_value, f"{case_id}.providers")
+        normalized = []
+        seen: set[str] = set()
+        for provider in providers:
+            provider_name = provider.strip().lower()
+            if not provider_name or provider_name in seen:
+                continue
+            seen.add(provider_name)
+            normalized.append(provider_name)
+        if not normalized:
+            raise ManifestError(f"{case_id}.providers must contain at least one provider.")
+        return normalized
+
+    provider = _optional_str(case_data.get("provider"))
+    return [provider.strip().lower() if provider else None]
+
+
+def _parse_cost_profiles(value: Any) -> dict[str, CostProfile]:
+    if value in (None, ""):
+        return {}
+    profiles_data = _as_mapping(value, "cost_profiles")
+    profiles: dict[str, CostProfile] = {}
+    for provider, raw_profile in profiles_data.items():
+        provider_name = str(provider).strip().lower()
+        if not provider_name:
+            raise ManifestError("cost_profiles provider names must be non-empty.")
+        profile_data = _as_mapping(raw_profile, f"cost_profiles.{provider_name}")
+        currency = _required_str(profile_data, "currency", f"cost_profiles.{provider_name}")
+        rate = _optional_float(
+            profile_data.get("asr_per_audio_minute"),
+            f"cost_profiles.{provider_name}.asr_per_audio_minute",
+        )
+        if rate is None:
+            raise ManifestError(f"cost_profiles.{provider_name}.asr_per_audio_minute is required.")
+        profiles[provider_name] = CostProfile(
+            provider=provider_name,
+            currency=currency,
+            asr_per_audio_minute=rate,
+        )
+    return profiles
+
+
+def _resolve_audio_duration_seconds(
+    case_data: dict[str, Any],
+    case_id: str,
+    audio_path: Path,
+) -> float | None:
+    configured_duration = _optional_float(
+        case_data.get("audio_duration_seconds"),
+        f"{case_id}.audio_duration_seconds",
+    )
+    if configured_duration is not None:
+        return configured_duration
+    return _read_wav_duration_seconds(audio_path)
+
+
+def _read_wav_duration_seconds(audio_path: Path) -> float | None:
+    if audio_path.suffix.lower() != ".wav" or not audio_path.is_file():
+        return None
+    with contextlib.suppress(wave.Error, OSError, EOFError):
+        with wave.open(str(audio_path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate <= 0:
+                return None
+            return wav_file.getnframes() / float(frame_rate)
+    return None
+
+
 def _poll_meeting(
     client: httpx.Client,
     *,
@@ -599,7 +777,19 @@ def _poll_meeting(
     return last_payload if last_payload and last_payload.get("status") in FINAL_STATUSES else None
 
 
-def _case_error_result(case: EvaluationCase, check_name: str, message: str) -> CaseResult:
+def _case_error_result(
+    case: EvaluationCase,
+    check_name: str,
+    message: str,
+    *,
+    latency_seconds: float | None = None,
+    cost_profiles: dict[str, CostProfile] | None = None,
+) -> CaseResult:
+    cost = _estimate_asr_cost(
+        provider=case.provider,
+        audio_duration_seconds=case.audio_duration_seconds,
+        cost_profiles=cost_profiles or {},
+    )
     return CaseResult(
         case_id=case.case_id,
         audio_filename=case.audio_filename,
@@ -610,6 +800,11 @@ def _case_error_result(case: EvaluationCase, check_name: str, message: str) -> C
         meeting_id=None,
         actual_provider=None,
         checks=[CheckResult(check_name, False, message)],
+        latency_seconds=latency_seconds,
+        audio_duration_seconds=case.audio_duration_seconds,
+        estimated_asr_cost=cost["amount"],
+        cost_currency=cost["currency"],
+        cost_status=cost["status"],
     )
 
 
@@ -626,6 +821,11 @@ def _case_result_to_json(result: CaseResult) -> dict[str, Any]:
         "passed": result.passed,
         "metrics": result.metrics,
         "meeting_record_file": result.meeting_record_file,
+        "latency_seconds": result.latency_seconds,
+        "audio_duration_seconds": result.audio_duration_seconds,
+        "estimated_asr_cost": result.estimated_asr_cost,
+        "cost_currency": result.cost_currency,
+        "cost_status": result.cost_status,
         "checks": [
             {
                 "name": check.name,
@@ -635,6 +835,74 @@ def _case_result_to_json(result: CaseResult) -> dict[str, Any]:
             }
             for check in result.checks
         ],
+    }
+
+
+def _build_provider_summary(results: list[CaseResult]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[CaseResult]] = {}
+    for result in results:
+        provider = result.actual_provider or result.requested_provider or "default"
+        grouped.setdefault(provider, []).append(result)
+
+    summaries: list[dict[str, Any]] = []
+    for provider, provider_results in sorted(grouped.items()):
+        passed = sum(1 for result in provider_results if result.passed)
+        total_costs = [result.estimated_asr_cost for result in provider_results if result.estimated_asr_cost is not None]
+        currencies = {
+            result.cost_currency
+            for result in provider_results
+            if result.estimated_asr_cost is not None and result.cost_currency
+        }
+        total_cost = sum(total_costs) if total_costs else None
+        cost_currency = next(iter(currencies)) if len(currencies) == 1 else ("mixed" if len(currencies) > 1 else None)
+        summaries.append(
+            {
+                "provider": provider,
+                "runs": len(provider_results),
+                "passed": passed,
+                "failed": len(provider_results) - passed,
+                "pass_rate": passed / len(provider_results) if provider_results else None,
+                "average_wer": _average_metric(provider_results, "wer"),
+                "average_cer": _average_metric(provider_results, "cer"),
+                "average_latency_seconds": _average_value(
+                    result.latency_seconds for result in provider_results
+                ),
+                "total_estimated_asr_cost": total_cost,
+                "cost_currency": cost_currency,
+                "cost_per_passed_case": total_cost / passed if total_cost is not None and passed else None,
+            }
+        )
+    return summaries
+
+
+def _average_metric(results: list[CaseResult], metric_name: str) -> float | None:
+    return _average_value(result.metrics.get(metric_name) for result in results)
+
+
+def _average_value(values: Any) -> float | None:
+    numeric_values = [float(value) for value in values if isinstance(value, int | float)]
+    if not numeric_values:
+        return None
+    return sum(numeric_values) / len(numeric_values)
+
+
+def _estimate_asr_cost(
+    *,
+    provider: str | None,
+    audio_duration_seconds: float | None,
+    cost_profiles: dict[str, CostProfile],
+) -> dict[str, Any]:
+    if audio_duration_seconds is None:
+        return {"status": "missing_audio_duration", "amount": None, "currency": None}
+    if provider is None:
+        return {"status": "not_configured", "amount": None, "currency": None}
+    profile = cost_profiles.get(provider.strip().lower())
+    if profile is None:
+        return {"status": "not_configured", "amount": None, "currency": None}
+    return {
+        "status": "estimated",
+        "amount": round((audio_duration_seconds / 60.0) * profile.asr_per_audio_minute, 6),
+        "currency": profile.currency,
     }
 
 
@@ -776,6 +1044,24 @@ def _optional_float(value: Any, context: str) -> float | None:
     if parsed < 0:
         raise ManifestError(f"{context} must be non-negative.")
     return parsed
+
+
+def _format_float(value: Any) -> str:
+    return f"{value:.3f}" if isinstance(value, int | float) else "n/a"
+
+
+def _format_percent(value: Any) -> str:
+    return f"{value * 100:.1f}%" if isinstance(value, int | float) else "n/a"
+
+
+def _format_seconds(value: Any) -> str:
+    return f"{value:.2f}s" if isinstance(value, int | float) else "n/a"
+
+
+def _format_money(value: Any, currency: Any) -> str:
+    if not isinstance(value, int | float):
+        return "n/a"
+    return f"{value:.4f} {currency}" if currency else f"{value:.4f}"
 
 
 def _safe_filename(value: str) -> str:

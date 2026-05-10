@@ -1,10 +1,23 @@
 {
+  "cost_profiles": {
+    "volcengine": {
+      "currency": "CNY",
+      "asr_per_audio_minute": 0.12
+    },
+    "dashscope": {
+      "currency": "CNY",
+      "asr_per_audio_minute": 0.2
+    }
+  },
   "cases": [
     {
       "id": "sales-qwen-upload-001",
       "audio_path": "audio/sales-qwen-upload-001.wav",
       "scene": "general",
-      "provider": "dashscope",
+      "providers": [
+        "volcengine",
+        "dashscope"
+      ],
       "target_lang": "en",
       "glossary_terms": [
         "queue wen=>Qwen",

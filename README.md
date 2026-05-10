@@ -160,7 +160,7 @@ docker-compose up --build
 
 - [Architecture](docs/architecture.md): system overview, realtime flow, upload flow, and meeting state diagrams.
 - [Configuration](docs/configuration.md): demo mode, provider variables, frontend overrides, and minimum setup matrix.
-- [Quality Evaluation](docs/quality-evaluation.md): local real-provider upload evaluation with private audio manifests and review reports.
+- [Quality Evaluation](docs/quality-evaluation.md): local real-provider upload evaluation, provider comparison, cost estimates, and review reports.
 - [Mobile Browser Testing](docs/mobile-testing.md): LAN, HTTPS, microphone, and WebSocket notes for phone validation.
 - [API Reference](docs/api.md): HTTP endpoints, WebSocket messages, and meeting record fields.
 - [Speaker Diarization](docs/diarization.md): offline and hybrid diarization setup.
