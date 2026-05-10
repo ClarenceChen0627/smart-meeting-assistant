@@ -171,6 +171,22 @@ class StubSummaryService:
         )
 
 
+class CountingSummaryService(StubSummaryService):
+    def __init__(self) -> None:
+        self.call_count = 0
+        self.transcript_counts: list[int] = []
+
+    async def generate_summary(self, transcripts, scene: str, *, glossary_terms=None) -> MeetingSummary:
+        self.call_count += 1
+        self.transcript_counts.append(len(transcripts))
+        summary = await super().generate_summary(transcripts, scene, glossary_terms=glossary_terms)
+        return summary.model_copy(
+            update={
+                "overview": f"Summary #{self.call_count} over {len(transcripts)} transcripts.",
+            }
+        )
+
+
 class StubMeetingAnalysisService:
     is_configured = True
 
@@ -291,6 +307,13 @@ def build_three_segments() -> list[TranscriptSegment]:
         TranscriptSegment(text="Hello team", start=0.0, end=1.0),
         TranscriptSegment(text="Let's finalize the plan", start=1.2, end=2.4),
         TranscriptSegment(text="I will send the update today", start=2.5, end=3.6),
+    ]
+
+
+def build_six_segments() -> list[TranscriptSegment]:
+    return [
+        TranscriptSegment(text=f"Agenda item {index}", start=float(index), end=float(index) + 0.8)
+        for index in range(6)
     ]
 
 
@@ -830,6 +853,182 @@ def test_meeting_history_persists_translation_latest_analysis_and_delete(tmp_pat
     assert list_response.json()[0]["preview_text"].startswith("The team reviewed")
     assert delete_response.status_code == 204
     assert missing_detail_response.status_code == 404
+
+
+def test_live_rolling_summary_emits_without_persisting_until_finalize(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_three_segments())
+    volcengine_client = StubASRClient("volcengine", build_three_segments(), is_configured=False)
+    summary_service = CountingSummaryService()
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        summary_service=summary_service,
+    )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&provider=dashscope") as websocket:
+            session_started = websocket.receive_json()
+            websocket.send_bytes(b"\x00\x00" * 160)
+            websocket.send_bytes(b"\x00\x00" * 160)
+            websocket.send_bytes(b"\x00\x00" * 160)
+
+            live_messages = receive_until(
+                websocket,
+                lambda messages: (
+                    sum(1 for message in messages if message["type"] == "transcript") == 3
+                    and any(message["type"] == "rolling_summary" for message in messages)
+                ),
+            )
+            draft_detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+            websocket.send_json({"type": "finalize"})
+            final_messages = receive_until(
+                websocket,
+                lambda messages: any(message["type"] == "summary" for message in messages),
+            )
+
+        finalized_detail_response = client.get(f"/api/meetings/{session_started['data']['meeting_id']}")
+
+    rolling_summary = next(message for message in live_messages if message["type"] == "rolling_summary")
+    final_summary = next(message for message in final_messages if message["type"] == "summary")
+    assert rolling_summary["data"]["overview"] == "Summary #1 over 3 transcripts."
+    assert final_summary["data"]["overview"] == "Summary #2 over 3 transcripts."
+    assert summary_service.transcript_counts == [3, 3]
+
+    assert draft_detail_response.status_code == 200
+    draft_payload = draft_detail_response.json()
+    assert draft_payload["status"] == "draft"
+    assert draft_payload["summary"] is None
+
+    assert finalized_detail_response.status_code == 200
+    finalized_payload = finalized_detail_response.json()
+    assert finalized_payload["status"] == "finalized"
+    assert finalized_payload["summary"]["overview"] == "Summary #2 over 3 transcripts."
+
+
+def test_live_rolling_summary_requires_three_new_transcripts_and_sixty_seconds(tmp_path, monkeypatch) -> None:
+    clock = {"now": 100.0}
+
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_six_segments())
+    volcengine_client = StubASRClient("volcengine", build_six_segments(), is_configured=False)
+    summary_service = CountingSummaryService()
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        summary_service=summary_service,
+    )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+    monkeypatch.setattr(session_manager, "_monotonic", lambda: clock["now"])
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&provider=dashscope") as websocket:
+            websocket.receive_json()
+            for _ in range(3):
+                websocket.send_bytes(b"\x00\x00" * 160)
+            receive_until(
+                websocket,
+                lambda messages: any(message["type"] == "rolling_summary" for message in messages),
+            )
+
+            for _ in range(3):
+                websocket.send_bytes(b"\x00\x00" * 160)
+            messages_before_sixty_seconds = receive_until(
+                websocket,
+                lambda messages: sum(1 for message in messages if message["type"] == "transcript") == 3,
+            )
+
+            websocket.send_json({"type": "finalize"})
+            receive_until(websocket, lambda messages: any(message["type"] == "summary" for message in messages))
+
+    assert not any(message["type"] == "rolling_summary" for message in messages_before_sixty_seconds)
+    assert summary_service.transcript_counts == [3, 6]
+
+
+def test_live_rolling_summary_allows_next_window_after_sixty_seconds(tmp_path, monkeypatch) -> None:
+    clock = {"now": 100.0}
+
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_six_segments())
+    volcengine_client = StubASRClient("volcengine", build_six_segments(), is_configured=False)
+    summary_service = CountingSummaryService()
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        summary_service=summary_service,
+    )
+    app.state.session_manager = session_manager
+    app.state.meeting_history_service = session_manager._meeting_history_service
+    monkeypatch.setattr(session_manager, "_monotonic", lambda: clock["now"])
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&provider=dashscope") as websocket:
+            websocket.receive_json()
+            for _ in range(3):
+                websocket.send_bytes(b"\x00\x00" * 160)
+            first_window_messages = receive_until(
+                websocket,
+                lambda messages: any(message["type"] == "rolling_summary" for message in messages),
+            )
+
+            clock["now"] = 161.0
+            for _ in range(3):
+                websocket.send_bytes(b"\x00\x00" * 160)
+            second_window_messages = receive_until(
+                websocket,
+                lambda messages: any(message["type"] == "rolling_summary" for message in messages),
+            )
+
+            websocket.send_json({"type": "finalize"})
+            final_messages = receive_until(
+                websocket,
+                lambda messages: any(message["type"] == "summary" for message in messages),
+            )
+
+    first_rolling = next(message for message in first_window_messages if message["type"] == "rolling_summary")
+    second_rolling = next(message for message in second_window_messages if message["type"] == "rolling_summary")
+    final_summary = next(message for message in final_messages if message["type"] == "summary")
+    assert first_rolling["data"]["overview"] == "Summary #1 over 3 transcripts."
+    assert second_rolling["data"]["overview"] == "Summary #2 over 6 transcripts."
+    assert final_summary["data"]["overview"] == "Summary #3 over 6 transcripts."
+    assert summary_service.transcript_counts == [3, 6, 6]
 
 
 def test_upload_endpoint_creates_processing_record_and_finalizes_with_results(tmp_path) -> None:

@@ -235,7 +235,27 @@ The client sends raw PCM audio bytes. To finish a live meeting, send:
 }
 ```
 
+### `rolling_summary`
+
+`rolling_summary` is a provisional live-only summary. It reuses the `MeetingSummary` shape, starts after at least three final transcript rows, and is throttled to every three new final rows with at least 60 seconds between requests. It is not saved to `summary_json`; the final `summary` event remains authoritative.
+
+```json
+{
+  "type": "rolling_summary",
+  "data": {
+    "title": "Launch Plan Review",
+    "overview": "The team is aligning on the launch plan so far.",
+    "key_topics": ["Launch plan"],
+    "decisions": [],
+    "action_items": [],
+    "risks": []
+  }
+}
+```
+
 ### `summary`
+
+The final `summary` event is emitted after live `finalize` or upload completion and is persisted to the meeting record.
 
 ```json
 {

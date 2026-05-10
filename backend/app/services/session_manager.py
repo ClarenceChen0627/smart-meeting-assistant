@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,9 @@ from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
+ROLLING_SUMMARY_MIN_FINAL_TRANSCRIPTS = 3
+ROLLING_SUMMARY_TRANSCRIPT_INTERVAL = 3
+ROLLING_SUMMARY_MIN_SECONDS = 60.0
 
 
 @dataclass
@@ -55,8 +59,12 @@ class MeetingSession:
     transcription_blocked: bool = False
     last_error_message: str | None = None
     last_summary_transcript_count: int = 0
+    last_rolling_summary_transcript_count: int = 0
+    last_rolling_summary_requested_at: float | None = None
     last_analysis_transcript_count: int = 0
     latest_analysis: MeetingAnalysis = field(default_factory=MeetingAnalysis.empty)
+    rolling_summary_in_progress: bool = False
+    rolling_summary_task: asyncio.Task[None] | None = None
     analysis_in_progress: bool = False
     analysis_task: asyncio.Task[None] | None = None
     translated_transcript_indices: set[int] = field(default_factory=set)
@@ -101,6 +109,7 @@ class SessionManager:
         self._translation_service = translation_service
         self._meeting_history_service = meeting_history_service
         self._glossary_service = glossary_service
+        self._monotonic = time.monotonic
         self._sessions: dict[str, MeetingSession] = {}
 
     async def create_session(
@@ -192,6 +201,12 @@ class SessionManager:
                 await session.analysis_task
             except asyncio.CancelledError:
                 pass
+        if session.rolling_summary_task is not None and not session.rolling_summary_task.done():
+            session.rolling_summary_task.cancel()
+            try:
+                await session.rolling_summary_task
+            except asyncio.CancelledError:
+                pass
         if session.asr_stream is not None:
             await session.asr_stream.aclose()
             session.asr_stream = None
@@ -263,6 +278,14 @@ class SessionManager:
                         )
                     finally:
                         session.realtime_diarization_task = None
+                if session.rolling_summary_task is not None and not session.rolling_summary_task.done():
+                    session.rolling_summary_task.cancel()
+                    try:
+                        await session.rolling_summary_task
+                    except asyncio.CancelledError:
+                        pass
+                    finally:
+                        session.rolling_summary_task = None
                 await self._finalize_speakers(session)
                 await self._send_analysis(session, force=True)
                 await self._send_summary(session, force=True)
@@ -587,6 +610,36 @@ class SessionManager:
         )
         session.last_summary_transcript_count = session.transcript_count
 
+    async def _send_rolling_summary(self, session: MeetingSession) -> None:
+        final_transcripts = self._final_transcripts(session)
+        if not final_transcripts:
+            return
+        if not self._summary_service.is_configured:
+            logger.info("Skipping rolling summary for %s because summary service is not configured.", session.session_id)
+            return
+
+        final_count = len(final_transcripts)
+        session.rolling_summary_in_progress = True
+        session.last_rolling_summary_requested_at = self._monotonic()
+        try:
+            summary = await self._summary_service.generate_summary(
+                final_transcripts,
+                session.scene,
+                glossary_terms=session.glossary_terms,
+            )
+            if session.finalizing:
+                return
+            await self._send_message(
+                session,
+                WebSocketMessage(
+                    type=WebSocketMessageType.ROLLING_SUMMARY,
+                    data=summary.model_dump(),
+                ),
+            )
+            session.last_rolling_summary_transcript_count = final_count
+        finally:
+            session.rolling_summary_in_progress = False
+
     async def _send_analysis(self, session: MeetingSession, *, force: bool = False) -> None:
         if not session.transcripts:
             return
@@ -634,6 +687,44 @@ class SessionManager:
 
         session.analysis_task = asyncio.create_task(run_analysis())
 
+    def _schedule_rolling_summary(self, session: MeetingSession) -> None:
+        if session.finalizing:
+            return
+        if session.rolling_summary_in_progress:
+            return
+        if session.rolling_summary_task is not None and not session.rolling_summary_task.done():
+            return
+        if not self._summary_service.is_configured:
+            return
+
+        final_count = len(self._final_transcripts(session))
+        if final_count < ROLLING_SUMMARY_MIN_FINAL_TRANSCRIPTS:
+            return
+        if (
+            final_count - session.last_rolling_summary_transcript_count
+            < ROLLING_SUMMARY_TRANSCRIPT_INTERVAL
+        ):
+            return
+        if (
+            session.last_rolling_summary_requested_at is not None
+            and self._monotonic() - session.last_rolling_summary_requested_at < ROLLING_SUMMARY_MIN_SECONDS
+        ):
+            return
+
+        async def run_rolling_summary() -> None:
+            try:
+                await self._send_rolling_summary(session)
+            except Exception:
+                logger.exception("Background rolling summary task failed for %s", session.session_id)
+            finally:
+                session.rolling_summary_task = None
+
+        session.rolling_summary_task = asyncio.create_task(run_rolling_summary())
+
+    @staticmethod
+    def _final_transcripts(session: MeetingSession) -> list[TranscriptItem]:
+        return [transcript for transcript in session.transcripts if transcript.transcript_is_final]
+
     async def _postprocess_final_transcript(
         self,
         session: MeetingSession,
@@ -649,6 +740,7 @@ class SessionManager:
             await session.translation_queue.put((transcript.transcript_index, transcript.text))
         if session.transcript_count % 3 == 0:
             self._schedule_analysis(session)
+        self._schedule_rolling_summary(session)
 
     async def _send_error(self, session: MeetingSession, message: str) -> None:
         await self._send_message(

@@ -55,7 +55,7 @@ The live workflow starts in `frontend/src/app/App.tsx`:
 6. `backend/app/api/websocket.py` accepts the socket and delegates to `SessionManager`.
 7. `SessionManager.create_session()` creates a draft meeting in SQLite, starts ASR consumption, and emits `session_started`.
 8. ASR segments are normalized into `TranscriptItem` rows, persisted, and emitted as `transcript` or `transcript_update`.
-9. Final transcript rows can trigger translation and periodic analysis.
+9. Final transcript rows can trigger translation, periodic analysis, and live rolling summaries.
 10. On `{ "type": "finalize" }`, the backend finishes ASR, runs final speaker confirmation when enabled, emits final analysis and summary, marks the meeting finalized, and closes the socket.
 
 ## 4. ASR Provider Selection
@@ -177,7 +177,7 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 
 ## 12. Current Boundaries
 
-- Summary generation happens after finalize or upload completion, not continuously during a live meeting.
+- Live rolling summaries are provisional and not persisted; the final summary is still generated after finalize or upload completion.
 - Translation supports one target language per meeting.
 - Mobile background and lock-screen recording is still controlled by the operating system and browser; the frontend detects common interruptions but cannot guarantee capture while suspended.
 - Raw audio is not stored in meeting history.

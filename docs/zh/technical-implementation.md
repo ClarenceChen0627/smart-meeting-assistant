@@ -107,6 +107,7 @@ smart-meeting-assistant/
 - `speaker_update`：结束后说话人分离结果回填。
 - `translation`：某条 transcript 的翻译结果。
 - `analysis`：会议情绪/参与度分析快照。
+- `rolling_summary`：live 会中的临时滚动摘要，不写入会议历史。
 - `summary`：最终会议总结。
 - `error`：错误信息。
 
@@ -1116,7 +1117,7 @@ sequenceDiagram
 
 结合代码可以看出，项目已经覆盖需求文档中的五项核心功能，但仍有一些工程边界：
 
-1. 实时 summary 只在 finalize 后生成；会议过程中只做周期性 analysis，不持续生成 summary。
+1. live 会中滚动摘要是临时结果，不写入会议历史；最终 summary 仍在 finalize 后生成并覆盖会中结果。
 2. 翻译是单目标语言，不支持一次会议同时输出多种目标语言。
 3. 移动端后台和锁屏录音仍由操作系统与浏览器控制；前端能检测常见中断并提示，但不能保证页面挂起后继续采集。
 4. 上传任务是进程内 `asyncio.create_task()`，服务重启会中断 processing；启动时 `reconcile_processing_uploads()` 会把中断的上传记录标为 failed。

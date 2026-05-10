@@ -13,6 +13,7 @@ class WebSocketMessageType(str, Enum):
     SPEAKER_UPDATE = "speaker_update"
     TRANSLATION = "translation"
     ANALYSIS = "analysis"
+    ROLLING_SUMMARY = "rolling_summary"
     SUMMARY = "summary"
     ERROR = "error"
 
