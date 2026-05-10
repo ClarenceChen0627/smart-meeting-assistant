@@ -70,6 +70,10 @@ cd backend
 - `RAW_AUDIO_DIR`：用户主动留存上传原始音频的目录，默认 `data/raw_audio`。
 - `UPLOAD_QUEUE_DIR`：持久上传队列的临时 payload 目录，默认 `data/upload_queue`。
 - `UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED`：默认随 FastAPI 启动内置上传 worker；设置为 `0` 后可用 `tools/run_upload_worker.py` 单独处理队列。
+- `UPLOAD_QUEUE_MAX_ATTEMPTS`：每个上传任务的队列级最大尝试次数，默认 `3`。
+- `UPLOAD_QUEUE_RETRY_BASE_SECONDS`：队列级指数退避的基础延迟秒数，默认 `30`。
+- `UPLOAD_QUEUE_RETRY_MAX_SECONDS`：队列级重试最大延迟秒数，默认 `300`。
+- `UPLOAD_QUEUE_PROCESSING_TIMEOUT_SECONDS`：启动恢复时判定 processing claim 过期的秒数，默认 `1800`。
 - `CUSTOM_GLOSSARY_TERMS`: 可选环境默认术语表。`/api/glossary/terms` 保存的术语和单场会议术语会先合并，再使用这里的 fallback 列表。每行一个术语，或使用 `term=>replacement`。
 - `DEFAULT_ASR_PROVIDER`: `volcengine`、`dashscope` 或 `demo`。
 - `DASHSCOPE_API_KEY`: DashScope ASR、翻译、总结和分析使用的 key。
@@ -107,6 +111,8 @@ cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 .\.venv\Scripts\python.exe tools\run_upload_worker.py --once
 ```
+
+`--once` 只处理当前已经到期可执行的任务；被 `UPLOAD_QUEUE_RETRY_BASE_SECONDS` / `UPLOAD_QUEUE_RETRY_MAX_SECONDS` 延迟的任务会继续留在队列中，直到 `next_run_at` 到期。
 
 ```bash
 cd backend

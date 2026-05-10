@@ -7,8 +7,9 @@ import re
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from app.schemas.glossary import GlossaryTerm
 
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class UploadJobStatus:
@@ -42,12 +47,31 @@ class UploadJob:
     claimed_at: str | None = None
     completed_at: str | None = None
     error_message: str | None = None
+    attempt_count: int = 0
+    max_attempts: int = 3
+    next_run_at: str | None = None
+    last_error: str | None = None
+    last_attempted_at: str | None = None
+    claimed_by: str | None = None
 
 
 class UploadQueueStore:
-    def __init__(self, *, db_path: Path | str, queue_dir: Path | str) -> None:
+    MISSING_PAYLOAD_ERROR = "Upload queue payload is missing and the job cannot be recovered."
+
+    def __init__(
+        self,
+        *,
+        db_path: Path | str,
+        queue_dir: Path | str,
+        max_attempts: int = 3,
+        retry_base_seconds: float = 30.0,
+        retry_max_seconds: float = 300.0,
+    ) -> None:
         self._db_path = Path(db_path)
         self._queue_dir = Path(queue_dir)
+        self._max_attempts = max(1, max_attempts)
+        self._retry_base_seconds = max(0.0, retry_base_seconds)
+        self._retry_max_seconds = max(self._retry_base_seconds, retry_max_seconds)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._queue_dir.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -87,8 +111,14 @@ class UploadQueueStore:
                     updated_at,
                     claimed_at,
                     completed_at,
-                    error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+                    error_message,
+                    attempt_count,
+                    max_attempts,
+                    next_run_at,
+                    last_error,
+                    last_attempted_at,
+                    claimed_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?, NULL, NULL, NULL, NULL)
                 """,
                 (
                     meeting_id,
@@ -102,6 +132,7 @@ class UploadQueueStore:
                     self._dump_glossary_terms(glossary_terms),
                     timestamp,
                     timestamp,
+                    self._max_attempts,
                 ),
             )
         job = self.get_job(meeting_id)
@@ -109,8 +140,9 @@ class UploadQueueStore:
             raise RuntimeError("Upload job was not created.")
         return job
 
-    def claim_next(self) -> UploadJob | None:
+    def claim_next(self, *, claimed_by: str | None = None) -> UploadJob | None:
         timestamp = _utc_now_iso()
+        worker_id = claimed_by or f"worker-{uuid4().hex[:12]}"
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -119,10 +151,11 @@ class UploadQueueStore:
                 SELECT meeting_id
                 FROM upload_jobs
                 WHERE status = ?
+                  AND (next_run_at IS NULL OR next_run_at <= ?)
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
-                (UploadJobStatus.QUEUED,),
+                (UploadJobStatus.QUEUED, timestamp),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -132,15 +165,26 @@ class UploadQueueStore:
             updated = connection.execute(
                 """
                 UPDATE upload_jobs
-                SET status = ?, claimed_at = ?, updated_at = ?, error_message = NULL
+                SET
+                    status = ?,
+                    claimed_at = ?,
+                    claimed_by = ?,
+                    last_attempted_at = ?,
+                    attempt_count = attempt_count + 1,
+                    updated_at = ?,
+                    error_message = NULL
                 WHERE meeting_id = ? AND status = ?
+                  AND (next_run_at IS NULL OR next_run_at <= ?)
                 """,
                 (
                     UploadJobStatus.PROCESSING,
                     timestamp,
+                    worker_id,
+                    timestamp,
                     timestamp,
                     meeting_id,
                     UploadJobStatus.QUEUED,
+                    timestamp,
                 ),
             ).rowcount
             if updated == 0:
@@ -173,16 +217,65 @@ class UploadQueueStore:
             ).fetchall()
         return {row["meeting_id"] for row in rows}
 
+    def terminal_failed_job_errors(self) -> dict[str, str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT meeting_id, error_message, last_error
+                FROM upload_jobs
+                WHERE status = ?
+                """,
+                (UploadJobStatus.FAILED,),
+            ).fetchall()
+        return {
+            row["meeting_id"]: row["error_message"] or row["last_error"] or "Upload processing failed."
+            for row in rows
+        }
+
+    def fail_jobs_with_missing_payloads(self) -> dict[str, str]:
+        failed: dict[str, str] = {}
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT meeting_id, payload_path
+                FROM upload_jobs
+                WHERE status IN (?, ?)
+                """,
+                (UploadJobStatus.QUEUED, UploadJobStatus.PROCESSING),
+            ).fetchall()
+
+        for row in rows:
+            payload_path = Path(row["payload_path"])
+            if payload_path.exists():
+                continue
+            self.mark_failed(row["meeting_id"], self.MISSING_PAYLOAD_ERROR)
+            failed[row["meeting_id"]] = self.MISSING_PAYLOAD_ERROR
+        return failed
+
     def release_processing_jobs(self) -> int:
         timestamp = _utc_now_iso()
         with self._connect() as connection:
             return connection.execute(
                 """
                 UPDATE upload_jobs
-                SET status = ?, claimed_at = NULL, updated_at = ?
+                SET status = ?, claimed_at = NULL, claimed_by = NULL, updated_at = ?
                 WHERE status = ?
                 """,
                 (UploadJobStatus.QUEUED, timestamp, UploadJobStatus.PROCESSING),
+            ).rowcount
+
+    def release_stale_processing_jobs(self, *, timeout_seconds: float) -> int:
+        cutoff = (_utc_now() - timedelta(seconds=max(0.0, timeout_seconds))).isoformat().replace("+00:00", "Z")
+        timestamp = _utc_now_iso()
+        with self._connect() as connection:
+            return connection.execute(
+                """
+                UPDATE upload_jobs
+                SET status = ?, claimed_at = NULL, claimed_by = NULL, updated_at = ?
+                WHERE status = ?
+                  AND (claimed_at IS NULL OR claimed_at <= ?)
+                """,
+                (UploadJobStatus.QUEUED, timestamp, UploadJobStatus.PROCESSING, cutoff),
             ).rowcount
 
     def mark_completed(self, meeting_id: str) -> None:
@@ -191,7 +284,13 @@ class UploadQueueStore:
             connection.execute(
                 """
                 UPDATE upload_jobs
-                SET status = ?, completed_at = ?, updated_at = ?, error_message = NULL
+                SET
+                    status = ?,
+                    completed_at = ?,
+                    updated_at = ?,
+                    error_message = NULL,
+                    last_error = NULL,
+                    next_run_at = NULL
                 WHERE meeting_id = ?
                 """,
                 (UploadJobStatus.COMPLETED, timestamp, timestamp, meeting_id),
@@ -203,11 +302,49 @@ class UploadQueueStore:
             connection.execute(
                 """
                 UPDATE upload_jobs
-                SET status = ?, completed_at = ?, updated_at = ?, error_message = ?
+                SET
+                    status = ?,
+                    completed_at = ?,
+                    updated_at = ?,
+                    error_message = ?,
+                    last_error = ?,
+                    next_run_at = NULL
                 WHERE meeting_id = ?
                 """,
-                (UploadJobStatus.FAILED, timestamp, timestamp, error_message, meeting_id),
+                (UploadJobStatus.FAILED, timestamp, timestamp, error_message, error_message, meeting_id),
             )
+
+    def mark_attempt_failed(self, job: UploadJob, error_message: str) -> bool:
+        if job.attempt_count >= job.max_attempts:
+            self.mark_failed(job.meeting_id, error_message)
+            return True
+
+        timestamp = _utc_now()
+        retry_delay = self._retry_delay_seconds(job.attempt_count)
+        next_run_at = (timestamp + timedelta(seconds=retry_delay)).isoformat().replace("+00:00", "Z")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE upload_jobs
+                SET
+                    status = ?,
+                    claimed_at = NULL,
+                    claimed_by = NULL,
+                    updated_at = ?,
+                    next_run_at = ?,
+                    last_error = ?,
+                    error_message = NULL
+                WHERE meeting_id = ?
+                """,
+                (
+                    UploadJobStatus.QUEUED,
+                    timestamp.isoformat().replace("+00:00", "Z"),
+                    next_run_at,
+                    error_message,
+                    job.meeting_id,
+                ),
+            )
+        return False
 
     def cleanup_payload(self, job: UploadJob) -> None:
         try:
@@ -236,9 +373,38 @@ class UploadQueueStore:
                     updated_at TEXT NOT NULL,
                     claimed_at TEXT,
                     completed_at TEXT,
-                    error_message TEXT
+                    error_message TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    next_run_at TEXT,
+                    last_error TEXT,
+                    last_attempted_at TEXT,
+                    claimed_by TEXT
                 )
                 """
+            )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(upload_jobs)").fetchall()
+            }
+            migrations = {
+                "attempt_count": "ALTER TABLE upload_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+                "max_attempts": "ALTER TABLE upload_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
+                "next_run_at": "ALTER TABLE upload_jobs ADD COLUMN next_run_at TEXT",
+                "last_error": "ALTER TABLE upload_jobs ADD COLUMN last_error TEXT",
+                "last_attempted_at": "ALTER TABLE upload_jobs ADD COLUMN last_attempted_at TEXT",
+                "claimed_by": "ALTER TABLE upload_jobs ADD COLUMN claimed_by TEXT",
+            }
+            for column, statement in migrations.items():
+                if column not in columns:
+                    connection.execute(statement)
+            connection.execute(
+                """
+                UPDATE upload_jobs
+                SET max_attempts = ?
+                WHERE max_attempts IS NULL OR max_attempts < 1
+                """,
+                (self._max_attempts,),
             )
             connection.execute(
                 """
@@ -279,7 +445,13 @@ class UploadQueueStore:
                 updated_at,
                 claimed_at,
                 completed_at,
-                error_message
+                error_message,
+                attempt_count,
+                max_attempts,
+                next_run_at,
+                last_error,
+                last_attempted_at,
+                claimed_by
             FROM upload_jobs
             WHERE meeting_id = ?
             """,
@@ -303,6 +475,12 @@ class UploadQueueStore:
             claimed_at=row["claimed_at"],
             completed_at=row["completed_at"],
             error_message=row["error_message"],
+            attempt_count=row["attempt_count"],
+            max_attempts=row["max_attempts"],
+            next_run_at=row["next_run_at"],
+            last_error=row["last_error"],
+            last_attempted_at=row["last_attempted_at"],
+            claimed_by=row["claimed_by"],
         )
 
     def _connect(self) -> sqlite3.Connection:
@@ -335,6 +513,12 @@ class UploadQueueStore:
                 continue
         return terms
 
+    def _retry_delay_seconds(self, attempt_count: int) -> float:
+        if attempt_count <= 0:
+            return self._retry_base_seconds
+        delay = self._retry_base_seconds * (2 ** (attempt_count - 1))
+        return min(delay, self._retry_max_seconds)
+
 
 class UploadQueueWorker:
     def __init__(
@@ -343,14 +527,17 @@ class UploadQueueWorker:
         name: str,
         store: UploadQueueStore,
         handler: Callable[[UploadJob], Awaitable[str | None]],
+        on_terminal_failure: Callable[[UploadJob, str], Awaitable[None] | None] | None = None,
         concurrency: int = 1,
         poll_interval_seconds: float = 0.1,
     ) -> None:
         self._name = name
         self._store = store
         self._handler = handler
+        self._on_terminal_failure = on_terminal_failure
         self._concurrency = max(1, concurrency)
         self._poll_interval_seconds = max(0.01, poll_interval_seconds)
+        self._worker_id = f"{name}-{uuid4().hex[:12]}"
         self._workers: list[asyncio.Task[None]] = []
         self._stopping = asyncio.Event()
 
@@ -383,7 +570,7 @@ class UploadQueueWorker:
     async def process_available_jobs(self) -> int:
         processed_count = 0
         while True:
-            job = self._store.claim_next()
+            job = self._store.claim_next(claimed_by=self._worker_id)
             if job is None:
                 return processed_count
             processed_count += 1
@@ -391,7 +578,7 @@ class UploadQueueWorker:
 
     async def _run(self, worker_index: int) -> None:
         while not self._stopping.is_set():
-            job = self._store.claim_next()
+            job = self._store.claim_next(claimed_by=self._worker_id)
             if job is None:
                 await asyncio.sleep(self._poll_interval_seconds)
                 continue
@@ -399,6 +586,13 @@ class UploadQueueWorker:
             await self._process_job(job)
 
     async def _process_job(self, job: UploadJob) -> None:
+        if not job.payload_path.exists():
+            error_message = UploadQueueStore.MISSING_PAYLOAD_ERROR
+            self._store.mark_failed(job.meeting_id, error_message)
+            await self._notify_terminal_failure(job, error_message)
+            self._store.cleanup_payload(job)
+            return
+
         try:
             error_message = await self._handler(job)
         except asyncio.CancelledError:
@@ -408,7 +602,17 @@ class UploadQueueWorker:
             error_message = str(exc).strip() or exc.__class__.__name__
 
         if error_message:
-            self._store.mark_failed(job.meeting_id, error_message)
+            terminal = self._store.mark_attempt_failed(job, error_message)
+            if terminal:
+                await self._notify_terminal_failure(job, error_message)
+                self._store.cleanup_payload(job)
         else:
             self._store.mark_completed(job.meeting_id)
-        self._store.cleanup_payload(job)
+            self._store.cleanup_payload(job)
+
+    async def _notify_terminal_failure(self, job: UploadJob, error_message: str) -> None:
+        if self._on_terminal_failure is None:
+            return
+        result = self._on_terminal_failure(job, error_message)
+        if result is not None:
+            await result

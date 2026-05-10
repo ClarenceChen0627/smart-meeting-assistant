@@ -182,7 +182,7 @@ docker-compose up --build
 - Live rolling summaries are provisional; the final saved summary is generated after `finalize`.
 - Realtime ASR can still misrecognize technical terms before glossary correction runs.
 - Mobile background and lock-screen recording remains limited by the operating system and browser; the frontend detects common interruptions and warns the user.
-- Upload processing uses a SQLite-backed persistent queue with an embedded worker by default; advanced retry governance is still future work.
+- Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs now have bounded retry, backoff, and stale recovery; broader observability is still future work.
 
 ## Roadmap
 

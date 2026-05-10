@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -31,7 +33,7 @@ from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 from app.services.upload_meeting_service import UploadMeetingService
-from app.services.upload_queue_service import UploadJobStatus, UploadQueueStore
+from app.services.upload_queue_service import UploadJobStatus, UploadQueueStore, UploadQueueWorker
 
 
 class StubAudioCodecService:
@@ -381,16 +383,27 @@ def build_upload_service(
     translation_service=None,
     glossary_store_service=None,
     embedded_worker_enabled: bool = True,
+    upload_queue_max_attempts: int = 1,
+    upload_queue_retry_base_seconds: float = 0,
+    upload_queue_retry_max_seconds: float = 0,
+    upload_queue_processing_timeout_seconds: float = 1800,
 ) -> tuple[Settings, MeetingHistoryService, UploadMeetingService]:
     settings = build_settings(
         tmp_path,
         default_asr_provider=default_asr_provider,
         diarization_mode=diarization_mode,
+        upload_queue_max_attempts=upload_queue_max_attempts,
+        upload_queue_retry_base_seconds=upload_queue_retry_base_seconds,
+        upload_queue_retry_max_seconds=upload_queue_retry_max_seconds,
+        upload_queue_processing_timeout_seconds=upload_queue_processing_timeout_seconds,
     )
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
     upload_queue_store = UploadQueueStore(
         db_path=settings.resolved_meeting_history_db_path,
         queue_dir=settings.resolved_upload_queue_dir,
+        max_attempts=settings.upload_queue_max_attempts,
+        retry_base_seconds=settings.upload_queue_retry_base_seconds,
+        retry_max_seconds=settings.upload_queue_retry_max_seconds,
     )
     return settings, meeting_history_service, UploadMeetingService(
         asr_provider_service=ASRProviderService(
@@ -409,6 +422,7 @@ def build_upload_service(
         raw_audio_retention_service=RawAudioRetentionService(settings),
         upload_queue_store=upload_queue_store,
         embedded_worker_enabled=embedded_worker_enabled,
+        upload_queue_processing_timeout_seconds=settings.upload_queue_processing_timeout_seconds,
     )
 
 
@@ -1635,6 +1649,322 @@ def test_upload_queue_claim_next_does_not_claim_same_job_twice(tmp_path) -> None
     assert first_claim.meeting_id == "meeting-1"
     assert first_claim.status == UploadJobStatus.PROCESSING
     assert second_claim is None
+
+
+def test_upload_queue_migrates_legacy_schema_and_sets_retry_defaults(tmp_path) -> None:
+    db_path = tmp_path / "meeting_history.sqlite3"
+    queue_dir = tmp_path / "upload_queue"
+    payload_dir = queue_dir / "legacy-meeting"
+    payload_dir.mkdir(parents=True)
+    payload_path = payload_dir / "source.wav"
+    payload_path.write_bytes(b"legacy-audio")
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE upload_jobs (
+                meeting_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                payload_path TEXT NOT NULL,
+                filename TEXT,
+                content_type TEXT,
+                scene TEXT NOT NULL,
+                target_lang TEXT,
+                provider TEXT NOT NULL,
+                glossary_terms_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                claimed_at TEXT,
+                completed_at TEXT,
+                error_message TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO upload_jobs (
+                meeting_id, status, payload_path, filename, content_type, scene,
+                target_lang, provider, glossary_terms_json, created_at, updated_at,
+                claimed_at, completed_at, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+            """,
+            (
+                "legacy-meeting",
+                UploadJobStatus.QUEUED,
+                str(payload_path),
+                "source.wav",
+                "audio/wav",
+                "general",
+                None,
+                "dashscope",
+                None,
+                timestamp,
+                timestamp,
+            ),
+        )
+
+    store = UploadQueueStore(db_path=db_path, queue_dir=queue_dir)
+    job = store.get_job("legacy-meeting")
+
+    assert job is not None
+    assert job.attempt_count == 0
+    assert job.max_attempts == 3
+    assert job.next_run_at is None
+    assert job.last_error is None
+    assert job.last_attempted_at is None
+    assert job.claimed_by is None
+
+
+def test_upload_queue_claim_next_skips_jobs_until_next_run_at(tmp_path) -> None:
+    db_path = tmp_path / "meeting_history.sqlite3"
+    store = UploadQueueStore(
+        db_path=db_path,
+        queue_dir=tmp_path / "upload_queue",
+    )
+    store.enqueue_upload(
+        meeting_id="delayed-meeting",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+    future_timestamp = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE upload_jobs SET next_run_at = ? WHERE meeting_id = ?",
+            (future_timestamp, "delayed-meeting"),
+        )
+
+    assert store.claim_next() is None
+    delayed_job = store.get_job("delayed-meeting")
+    assert delayed_job is not None
+    assert delayed_job.status == UploadJobStatus.QUEUED
+    assert delayed_job.attempt_count == 0
+
+
+def test_upload_queue_claim_next_records_attempt_metadata(tmp_path) -> None:
+    store = UploadQueueStore(
+        db_path=tmp_path / "meeting_history.sqlite3",
+        queue_dir=tmp_path / "upload_queue",
+    )
+    store.enqueue_upload(
+        meeting_id="meeting-1",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+
+    claimed_job = store.claim_next(claimed_by="test-worker")
+
+    assert claimed_job is not None
+    assert claimed_job.status == UploadJobStatus.PROCESSING
+    assert claimed_job.attempt_count == 1
+    assert claimed_job.claimed_by == "test-worker"
+    assert claimed_job.claimed_at is not None
+    assert claimed_job.last_attempted_at is not None
+
+
+def test_upload_worker_requeues_retryable_failure_and_preserves_payload(tmp_path) -> None:
+    store = UploadQueueStore(
+        db_path=tmp_path / "meeting_history.sqlite3",
+        queue_dir=tmp_path / "upload_queue",
+        max_attempts=2,
+        retry_base_seconds=60,
+    )
+    store.enqueue_upload(
+        meeting_id="retry-meeting",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+    terminal_failures: list[str] = []
+
+    async def fail_once(job):
+        return "provider unavailable"
+
+    worker = UploadQueueWorker(
+        name="test-worker",
+        store=store,
+        handler=fail_once,
+        on_terminal_failure=lambda job, error: terminal_failures.append(error),
+    )
+
+    processed_count = asyncio.run(worker.process_available_jobs())
+
+    assert processed_count == 1
+    job = store.get_job("retry-meeting")
+    assert job is not None
+    assert job.status == UploadJobStatus.QUEUED
+    assert job.attempt_count == 1
+    assert job.last_error == "provider unavailable"
+    assert job.error_message is None
+    assert job.next_run_at is not None
+    assert job.payload_path.exists()
+    assert terminal_failures == []
+
+
+def test_upload_worker_marks_terminal_failed_after_attempts_exhausted(tmp_path) -> None:
+    store = UploadQueueStore(
+        db_path=tmp_path / "meeting_history.sqlite3",
+        queue_dir=tmp_path / "upload_queue",
+        max_attempts=1,
+    )
+    queued_job = store.enqueue_upload(
+        meeting_id="failed-meeting",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+    terminal_failures: list[tuple[str, str]] = []
+
+    async def always_fail(job):
+        return "provider unavailable"
+
+    worker = UploadQueueWorker(
+        name="test-worker",
+        store=store,
+        handler=always_fail,
+        on_terminal_failure=lambda job, error: terminal_failures.append((job.meeting_id, error)),
+    )
+
+    processed_count = asyncio.run(worker.process_available_jobs())
+
+    assert processed_count == 1
+    job = store.get_job("failed-meeting")
+    assert job is not None
+    assert job.status == UploadJobStatus.FAILED
+    assert job.attempt_count == 1
+    assert job.error_message == "provider unavailable"
+    assert terminal_failures == [("failed-meeting", "provider unavailable")]
+    assert not queued_job.payload_path.exists()
+
+
+def test_upload_worker_retry_succeeds_and_cleans_payload(tmp_path) -> None:
+    store = UploadQueueStore(
+        db_path=tmp_path / "meeting_history.sqlite3",
+        queue_dir=tmp_path / "upload_queue",
+        max_attempts=2,
+        retry_base_seconds=0,
+    )
+    queued_job = store.enqueue_upload(
+        meeting_id="eventual-success",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+    call_count = 0
+
+    async def flaky_handler(job):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "temporary provider failure"
+        return None
+
+    worker = UploadQueueWorker(name="test-worker", store=store, handler=flaky_handler)
+
+    processed_count = asyncio.run(worker.process_available_jobs())
+
+    assert processed_count == 2
+    job = store.get_job("eventual-success")
+    assert job is not None
+    assert job.status == UploadJobStatus.COMPLETED
+    assert job.attempt_count == 2
+    assert job.last_error is None
+    assert not queued_job.payload_path.exists()
+
+
+def test_upload_queue_releases_only_stale_processing_jobs(tmp_path) -> None:
+    db_path = tmp_path / "meeting_history.sqlite3"
+    store = UploadQueueStore(
+        db_path=db_path,
+        queue_dir=tmp_path / "upload_queue",
+    )
+    for meeting_id in ("fresh-processing", "stale-processing"):
+        store.enqueue_upload(
+            meeting_id=meeting_id,
+            audio_data=b"queued-audio",
+            filename="meeting.wav",
+            content_type="audio/wav",
+            scene="general",
+            target_lang=None,
+            provider="dashscope",
+            glossary_terms=[],
+        )
+        assert store.claim_next(claimed_by=f"{meeting_id}-worker") is not None
+    stale_timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE upload_jobs SET claimed_at = ? WHERE meeting_id = ?",
+            (stale_timestamp, "stale-processing"),
+        )
+
+    released_count = store.release_stale_processing_jobs(timeout_seconds=1800)
+
+    fresh_job = store.get_job("fresh-processing")
+    stale_job = store.get_job("stale-processing")
+    assert released_count == 1
+    assert fresh_job is not None
+    assert fresh_job.status == UploadJobStatus.PROCESSING
+    assert stale_job is not None
+    assert stale_job.status == UploadJobStatus.QUEUED
+
+
+def test_upload_worker_missing_payload_marks_terminal_failed(tmp_path) -> None:
+    store = UploadQueueStore(
+        db_path=tmp_path / "meeting_history.sqlite3",
+        queue_dir=tmp_path / "upload_queue",
+    )
+    queued_job = store.enqueue_upload(
+        meeting_id="missing-payload",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+    queued_job.payload_path.unlink()
+    terminal_failures: list[str] = []
+
+    async def handler(job):
+        raise AssertionError("Handler should not run when payload is missing.")
+
+    worker = UploadQueueWorker(
+        name="test-worker",
+        store=store,
+        handler=handler,
+        on_terminal_failure=lambda job, error: terminal_failures.append(error),
+    )
+
+    processed_count = asyncio.run(worker.process_available_jobs())
+
+    job = store.get_job("missing-payload")
+    assert processed_count == 1
+    assert job is not None
+    assert job.status == UploadJobStatus.FAILED
+    assert job.error_message == UploadQueueStore.MISSING_PAYLOAD_ERROR
+    assert terminal_failures == [UploadQueueStore.MISSING_PAYLOAD_ERROR]
 
 
 def test_upload_queue_reconcile_requeues_processing_jobs_and_marks_orphans_failed(tmp_path) -> None:

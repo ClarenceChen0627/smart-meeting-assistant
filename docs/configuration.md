@@ -70,6 +70,10 @@ cd backend
 - `RAW_AUDIO_DIR`: retained upload audio directory, default `data/raw_audio`.
 - `UPLOAD_QUEUE_DIR`: temporary persistent upload queue payload directory, default `data/upload_queue`.
 - `UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED`: starts an in-process upload queue worker with FastAPI by default. Set to `0` when running a separate worker with `tools/run_upload_worker.py`.
+- `UPLOAD_QUEUE_MAX_ATTEMPTS`: maximum queue-level attempts per upload job, default `3`.
+- `UPLOAD_QUEUE_RETRY_BASE_SECONDS`: base delay for queue-level exponential backoff, default `30`.
+- `UPLOAD_QUEUE_RETRY_MAX_SECONDS`: maximum queue-level retry delay, default `300`.
+- `UPLOAD_QUEUE_PROCESSING_TIMEOUT_SECONDS`: stale processing claim timeout used during startup recovery, default `1800`.
 - `CUSTOM_GLOSSARY_TERMS`: optional environment default glossary. Saved terms from `/api/glossary/terms` and per-meeting terms are merged before this fallback list. Use one term per line or `term=>replacement`.
 - `DEFAULT_ASR_PROVIDER`: `volcengine`, `dashscope`, or `demo`.
 - `DASHSCOPE_API_KEY`: DashScope key for ASR, translation, summary, and analysis.
@@ -107,6 +111,8 @@ cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 .\.venv\Scripts\python.exe tools\run_upload_worker.py --once
 ```
+
+`--once` processes only jobs that are eligible at command start. Jobs delayed by `UPLOAD_QUEUE_RETRY_BASE_SECONDS` / `UPLOAD_QUEUE_RETRY_MAX_SECONDS` remain queued until their `next_run_at`.
 
 ```bash
 cd backend

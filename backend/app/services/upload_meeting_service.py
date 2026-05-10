@@ -49,6 +49,7 @@ class UploadMeetingService:
         raw_audio_retention_service: RawAudioRetentionService,
         upload_queue_store: UploadQueueStore,
         embedded_worker_enabled: bool = True,
+        upload_queue_processing_timeout_seconds: float = 1800.0,
         upload_queue_worker: UploadQueueWorker | None = None,
     ) -> None:
         self._asr_provider_service = asr_provider_service
@@ -63,10 +64,12 @@ class UploadMeetingService:
         self._raw_audio_retention_service = raw_audio_retention_service
         self._upload_queue_store = upload_queue_store
         self._embedded_worker_enabled = embedded_worker_enabled
+        self._upload_queue_processing_timeout_seconds = upload_queue_processing_timeout_seconds
         self._upload_queue_worker = upload_queue_worker or UploadQueueWorker(
             name="upload-meetings",
             store=upload_queue_store,
             handler=self.process_upload_job,
+            on_terminal_failure=self._mark_job_terminal_failed,
         )
         self.reconcile_upload_queue()
 
@@ -132,7 +135,15 @@ class UploadMeetingService:
             self._upload_queue_worker.start()
 
     def reconcile_upload_queue(self) -> None:
-        self._upload_queue_store.release_processing_jobs()
+        self._upload_queue_store.release_stale_processing_jobs(
+            timeout_seconds=self._upload_queue_processing_timeout_seconds
+        )
+        for meeting_id, error_message in self._upload_queue_store.fail_jobs_with_missing_payloads().items():
+            self._meeting_history_service.mark_failed(meeting_id, error_message)
+        for meeting_id, error_message in self._upload_queue_store.terminal_failed_job_errors().items():
+            meeting = self._meeting_history_service.get_meeting(meeting_id)
+            if meeting is not None and meeting.status == MeetingHistoryStatus.PROCESSING:
+                self._meeting_history_service.mark_failed(meeting_id, error_message)
         self._meeting_history_service.reconcile_processing_uploads(
             self._upload_queue_store.active_job_meeting_ids()
         )
@@ -143,6 +154,7 @@ class UploadMeetingService:
     async def process_upload_job(self, job: UploadJob) -> str | None:
         try:
             audio_data = job.payload_path.read_bytes()
+            self._meeting_history_service.mark_processing(job.meeting_id, MeetingProcessingStage.TRANSCRIBING)
             await self._process_upload(
                 meeting_id=job.meeting_id,
                 audio_data=audio_data,
@@ -159,11 +171,13 @@ class UploadMeetingService:
         except Exception as exc:
             logger.exception("Upload meeting processing failed for %s", job.meeting_id)
             message = str(exc).strip() or exc.__class__.__name__
-            self._meeting_history_service.mark_failed(job.meeting_id, message)
             return message
 
     async def shutdown(self) -> None:
         await self._upload_queue_worker.shutdown()
+
+    def _mark_job_terminal_failed(self, job: UploadJob, error_message: str) -> None:
+        self._meeting_history_service.mark_failed(job.meeting_id, error_message)
 
     async def _process_upload(
         self,

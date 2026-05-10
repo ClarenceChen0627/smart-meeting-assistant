@@ -94,7 +94,9 @@ The product upload path is `POST /api/meetings/upload`.
 8. Translation, analysis, and summary are generated and persisted.
 9. The meeting is marked `finalized` on success or `failed` on unrecoverable errors, and the temporary queue payload is removed.
 
-The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, analysis, summary, and action items in the same workspace used by live meetings. Runtime ASR, analysis, and summary failures are retried once before the upload is marked failed. The frontend keeps the selected file in memory during the current page session so failed uploads can be submitted again. Queue payload files are temporary processing inputs and are separate from user-requested raw audio retention.
+The frontend polls `GET /api/meetings/{meeting_id}` and renders transcript, analysis, summary, and action items in the same workspace used by live meetings. Runtime ASR, analysis, and summary failures are retried once inside a single job attempt. If the full upload job still fails, the queue keeps the payload, records `last_error`, and retries with bounded exponential backoff until `UPLOAD_QUEUE_MAX_ATTEMPTS` is exhausted. Only terminal failures mark the meeting `failed`; retryable failures keep the meeting `processing`.
+
+On startup, stale `processing` queue claims older than `UPLOAD_QUEUE_PROCESSING_TIMEOUT_SECONDS` are released back to `queued`. Processing upload meetings with no active queue job are marked interrupted. Missing queue payload files are unrecoverable and mark both the job and meeting failed. Queue payload files are temporary processing inputs and are separate from user-requested raw audio retention.
 
 ## 7. Meeting History
 
@@ -146,6 +148,9 @@ Configuration is environment-variable driven. Important variables include:
 - `MEETING_HISTORY_DB_PATH`: SQLite meeting history location.
 - `UPLOAD_QUEUE_DIR`: temporary upload queue payload directory.
 - `UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED`: controls whether FastAPI starts the embedded upload worker.
+- `UPLOAD_QUEUE_MAX_ATTEMPTS`: maximum queue-level attempts per upload job.
+- `UPLOAD_QUEUE_RETRY_BASE_SECONDS` and `UPLOAD_QUEUE_RETRY_MAX_SECONDS`: exponential backoff bounds for retryable upload job failures.
+- `UPLOAD_QUEUE_PROCESSING_TIMEOUT_SECONDS`: stale processing claim timeout used during startup recovery.
 
 `GET /api/health` reports `demoMode`, configured provider status, and available ASR providers.
 
@@ -184,7 +189,7 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 - Translation supports one target language per meeting.
 - Mobile background and lock-screen recording is still controlled by the operating system and browser; the frontend detects common interruptions but cannot guarantee capture while suspended.
 - Raw audio is not stored in meeting history.
-- Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Advanced retry backoff and attempt governance are still future work.
+- Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Upload jobs now have bounded retry, backoff, and stale-claim recovery; broader observability remains future work.
 - Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.
