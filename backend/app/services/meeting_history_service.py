@@ -40,7 +40,6 @@ class MeetingHistoryService:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
-        self.reconcile_processing_uploads()
 
     def create_meeting(
         self,
@@ -694,10 +693,23 @@ class MeetingHistoryService:
             self._delete_retained_audio(row["raw_audio_path"])
         return deleted > 0
 
-    def reconcile_processing_uploads(self) -> None:
+    def reconcile_processing_uploads(self, active_upload_job_ids: set[str] | None = None) -> None:
+        parameters: list[str] = [
+            MeetingHistoryStatus.FAILED.value,
+            self.INTERRUPTED_UPLOAD_ERROR,
+            _utc_now_iso(),
+            MeetingSourceType.UPLOAD.value,
+            MeetingHistoryStatus.PROCESSING.value,
+        ]
+        job_filter = ""
+        if active_upload_job_ids:
+            placeholders = ", ".join("?" for _ in active_upload_job_ids)
+            job_filter = f" AND meeting_id NOT IN ({placeholders})"
+            parameters.extend(sorted(active_upload_job_ids))
+
         with self._connect() as connection:
             connection.execute(
-                """
+                f"""
                 UPDATE meetings
                 SET
                     status = ?,
@@ -705,14 +717,9 @@ class MeetingHistoryService:
                     error_message = ?,
                     updated_at = ?
                 WHERE source_type = ? AND status = ?
+                {job_filter}
                 """,
-                (
-                    MeetingHistoryStatus.FAILED.value,
-                    self.INTERRUPTED_UPLOAD_ERROR,
-                    _utc_now_iso(),
-                    MeetingSourceType.UPLOAD.value,
-                    MeetingHistoryStatus.PROCESSING.value,
-                ),
+                parameters,
             )
 
     def _initialize(self) -> None:

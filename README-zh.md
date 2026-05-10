@@ -181,7 +181,7 @@ docker-compose up --build
 - 会中 rolling summary 是临时结果；最终保存的 summary 仍在 `finalize` 后生成。
 - 实时 ASR 在术语表纠错前仍可能误识别技术术语。
 - 移动端后台和锁屏录音仍受操作系统与浏览器限制；前端会检测常见中断并提示用户。
-- Upload processing 使用进程内 worker queue；分布式 worker queue 仍不在当前范围内。
+- Upload processing 使用 SQLite 持久队列，默认由内置 worker 消费；更完整的重试治理仍是后续工作。
 
 ## Roadmap
 

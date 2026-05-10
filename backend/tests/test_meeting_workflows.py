@@ -17,7 +17,7 @@ from app.services.asr_provider_service import ASRProviderService
 from app.core.config import Settings
 from app.schemas.analysis import MeetingAnalysis, MeetingAnalysisHighlight, MeetingSignalCounts, ParticipantAnalysis
 from app.schemas.glossary import GlossaryTermCreate
-from app.schemas.meeting_history import MeetingHistoryStatus, MeetingSourceType
+from app.schemas.meeting_history import MeetingHistoryStatus, MeetingProcessingStage, MeetingSourceType
 from app.schemas.summary import MeetingSummary
 from app.schemas.transcript import TranscriptItem, TranscriptSegment
 from app.services.diarization_service import DiarizationResult, DiarizationService, DiarizationTurn
@@ -31,6 +31,7 @@ from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 from app.services.upload_meeting_service import UploadMeetingService
+from app.services.upload_queue_service import UploadJobStatus, UploadQueueStore
 
 
 class StubAudioCodecService:
@@ -321,6 +322,7 @@ def build_settings(tmp_path, **overrides) -> Settings:
     return Settings(
         meeting_history_db_path=str(tmp_path / "meeting_history.sqlite3"),
         raw_audio_dir=str(tmp_path / "raw_audio"),
+        upload_queue_dir=str(tmp_path / "upload_queue"),
         **overrides,
     )
 
@@ -378,6 +380,7 @@ def build_upload_service(
     meeting_analysis_service=None,
     translation_service=None,
     glossary_store_service=None,
+    embedded_worker_enabled: bool = True,
 ) -> tuple[Settings, MeetingHistoryService, UploadMeetingService]:
     settings = build_settings(
         tmp_path,
@@ -385,6 +388,10 @@ def build_upload_service(
         diarization_mode=diarization_mode,
     )
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    upload_queue_store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
     return settings, meeting_history_service, UploadMeetingService(
         asr_provider_service=ASRProviderService(
             settings=settings,
@@ -400,6 +407,8 @@ def build_upload_service(
         meeting_history_service=meeting_history_service,
         glossary_service=GlossaryService(settings, glossary_store_service),
         raw_audio_retention_service=RawAudioRetentionService(settings),
+        upload_queue_store=upload_queue_store,
+        embedded_worker_enabled=embedded_worker_enabled,
     )
 
 
@@ -1507,6 +1516,234 @@ def test_upload_audio_conversion_failure_is_not_retried(tmp_path) -> None:
     assert failed_payload["error_message"] == "Audio conversion failed in test"
 
 
+def test_upload_endpoint_enqueues_persistent_job_when_embedded_worker_is_disabled(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", [], is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    settings, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        embedded_worker_enabled=False,
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            data={"scene": "general", "provider": "dashscope"},
+            files={"file": ("meeting.wav", b"queued-audio", "audio/wav")},
+        )
+        assert response.status_code == 202
+        payload = response.json()
+
+    store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
+    job = store.get_job(payload["meeting_id"])
+    assert job is not None
+    assert job.status == UploadJobStatus.QUEUED
+    assert job.payload_path.read_bytes() == b"queued-audio"
+    meeting = meeting_history_service.get_meeting(payload["meeting_id"])
+    assert meeting is not None
+    assert meeting.status == MeetingHistoryStatus.PROCESSING
+
+
+def test_upload_worker_processes_persistent_job_and_cleans_queue_payload(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", [], is_configured=False)
+    app = FastAPI()
+    app.include_router(meetings_router)
+    settings, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        embedded_worker_enabled=False,
+    )
+    app.state.meeting_history_service = meeting_history_service
+    app.state.upload_meeting_service = upload_meeting_service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/meetings/upload",
+            data={"scene": "general", "provider": "dashscope", "retain_raw_audio": "true"},
+            files={"file": ("meeting.wav", b"queued-audio", "audio/wav")},
+        )
+        assert response.status_code == 202
+        payload = response.json()
+
+    store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
+    queued_job = store.get_job(payload["meeting_id"])
+    assert queued_job is not None
+    assert queued_job.payload_path.exists()
+
+    processed_count = asyncio.run(upload_meeting_service.process_available_jobs())
+
+    assert processed_count == 1
+    completed_job = store.get_job(payload["meeting_id"])
+    assert completed_job is not None
+    assert completed_job.status == UploadJobStatus.COMPLETED
+    assert not queued_job.payload_path.exists()
+    assert (tmp_path / "raw_audio" / payload["meeting_id"] / "meeting.wav").exists()
+    finalized_meeting = meeting_history_service.get_meeting(payload["meeting_id"])
+    assert finalized_meeting is not None
+    assert finalized_meeting.status == MeetingHistoryStatus.FINALIZED
+
+
+def test_upload_queue_claim_next_does_not_claim_same_job_twice(tmp_path) -> None:
+    store = UploadQueueStore(
+        db_path=tmp_path / "meeting_history.sqlite3",
+        queue_dir=tmp_path / "upload_queue",
+    )
+    store.enqueue_upload(
+        meeting_id="meeting-1",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+
+    first_claim = store.claim_next()
+    second_claim = store.claim_next()
+
+    assert first_claim is not None
+    assert first_claim.meeting_id == "meeting-1"
+    assert first_claim.status == UploadJobStatus.PROCESSING
+    assert second_claim is None
+
+
+def test_upload_queue_reconcile_requeues_processing_jobs_and_marks_orphans_failed(tmp_path) -> None:
+    settings = build_settings(tmp_path)
+    meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
+    for meeting_id in ("with-job", "orphan"):
+        meeting_history_service.create_meeting(
+            meeting_id=meeting_id,
+            scene="general",
+            target_lang=None,
+            provider="dashscope",
+            status=MeetingHistoryStatus.PROCESSING,
+            source_type=MeetingSourceType.UPLOAD,
+            processing_stage=MeetingProcessingStage.TRANSCRIBING,
+        )
+    store.enqueue_upload(
+        meeting_id="with-job",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+        glossary_terms=[],
+    )
+    claimed_job = store.claim_next()
+    assert claimed_job is not None
+    assert claimed_job.status == UploadJobStatus.PROCESSING
+
+    store.release_processing_jobs()
+    meeting_history_service.reconcile_processing_uploads(store.active_job_meeting_ids())
+
+    requeued_job = store.get_job("with-job")
+    meeting_with_job = meeting_history_service.get_meeting("with-job")
+    orphan_meeting = meeting_history_service.get_meeting("orphan")
+    assert requeued_job is not None
+    assert requeued_job.status == UploadJobStatus.QUEUED
+    assert meeting_with_job is not None
+    assert meeting_with_job.status == MeetingHistoryStatus.PROCESSING
+    assert orphan_meeting is not None
+    assert orphan_meeting.status == MeetingHistoryStatus.FAILED
+    assert orphan_meeting.error_message == MeetingHistoryService.INTERRUPTED_UPLOAD_ERROR
+
+
+def test_upload_worker_cli_once_processes_queued_demo_job(tmp_path, monkeypatch) -> None:
+    from tools import run_upload_worker
+
+    settings = build_settings(
+        tmp_path,
+        demo_mode=True,
+        default_asr_provider="demo",
+        diarization_mode="disabled",
+        upload_queue_embedded_worker_enabled=False,
+    )
+    demo_asr_client = DemoASRClient(settings)
+    demo_llm_client = DemoDashScopeClient(settings)
+    speaker_service = SpeakerService()
+    meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
+    queue_store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
+    upload_meeting_service = UploadMeetingService(
+        asr_provider_service=ASRProviderService(
+            settings=settings,
+            dashscope_client=StubASRClient("dashscope", [], is_configured=False),
+            volcengine_client=StubASRClient("volcengine", [], is_configured=False),
+            demo_client=demo_asr_client,
+        ),
+        audio_codec_service=FailingAudioCodecService(),
+        speaker_service=speaker_service,
+        diarization_service=StubDiarizationService(speaker_service, DiarizationResult(succeeded=True, turns=[])),
+        summary_service=SummaryService(demo_llm_client),
+        meeting_analysis_service=MeetingAnalysisService(demo_llm_client),
+        translation_service=TranslationService(demo_llm_client),
+        meeting_history_service=meeting_history_service,
+        glossary_service=GlossaryService(settings),
+        raw_audio_retention_service=RawAudioRetentionService(settings),
+        upload_queue_store=queue_store,
+        embedded_worker_enabled=False,
+    )
+    queued_meeting = asyncio.run(
+        upload_meeting_service.start_upload(
+            audio_data=b"demo-audio",
+            filename="demo.wav",
+            content_type="audio/wav",
+            scene="general",
+            target_lang="es",
+            preferred_provider="demo",
+            retain_raw_audio=False,
+        )
+    )
+    monkeypatch.setattr(run_upload_worker, "settings", settings)
+
+    exit_code = asyncio.run(run_upload_worker.run_worker(once=True))
+
+    assert exit_code == 0
+    finalized_meeting = meeting_history_service.get_meeting(queued_meeting.meeting_id)
+    assert finalized_meeting is not None
+    assert finalized_meeting.status == MeetingHistoryStatus.FINALIZED
+    job = queue_store.get_job(queued_meeting.meeting_id)
+    assert job is not None
+    assert job.status == UploadJobStatus.COMPLETED
+
+
 def test_meeting_action_item_status_update_is_persisted(tmp_path) -> None:
     history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
     history_service.create_meeting(
@@ -2054,6 +2291,7 @@ def test_meeting_history_service_migrates_old_schema_and_reconciles_processing_u
     connection.close()
 
     service = MeetingHistoryService(db_path)
+    service.reconcile_processing_uploads()
     meeting = service.get_meeting("legacy-upload")
     assert meeting is not None
     assert meeting.status.value == "failed"
@@ -2224,6 +2462,10 @@ def test_demo_upload_finalizes_without_audio_conversion_or_external_keys(tmp_pat
         meeting_history_service=meeting_history_service,
         glossary_service=GlossaryService(settings),
         raw_audio_retention_service=RawAudioRetentionService(settings),
+        upload_queue_store=UploadQueueStore(
+            db_path=settings.resolved_meeting_history_db_path,
+            queue_dir=settings.resolved_upload_queue_dir,
+        ),
     )
     app = FastAPI()
     app.include_router(meetings_router)

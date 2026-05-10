@@ -62,6 +62,8 @@ class Settings:
     meeting_history_db_path: str = os.getenv("MEETING_HISTORY_DB_PATH", "data/meeting_history.sqlite3")
     raw_audio_retention_enabled: bool = _env_flag("RAW_AUDIO_RETENTION_ENABLED", True)
     raw_audio_dir: str = os.getenv("RAW_AUDIO_DIR", "data/raw_audio")
+    upload_queue_dir: str = os.getenv("UPLOAD_QUEUE_DIR", "data/upload_queue")
+    upload_queue_embedded_worker_enabled: bool = _env_flag("UPLOAD_QUEUE_EMBEDDED_WORKER_ENABLED", True)
     custom_glossary_terms: str = os.getenv("CUSTOM_GLOSSARY_TERMS", "")
     default_asr_provider: str = os.getenv("DEFAULT_ASR_PROVIDER", "volcengine").strip().lower() or "volcengine"
 
@@ -158,6 +160,13 @@ class Settings:
     @property
     def resolved_raw_audio_dir(self) -> Path:
         configured_path = Path(self.raw_audio_dir)
+        if configured_path.is_absolute():
+            return configured_path
+        return PROJECT_ROOT / configured_path
+
+    @property
+    def resolved_upload_queue_dir(self) -> Path:
+        configured_path = Path(self.upload_queue_dir)
         if configured_path.is_absolute():
             return configured_path
         return PROJECT_ROOT / configured_path
