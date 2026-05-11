@@ -154,7 +154,15 @@ Configuration is environment-variable driven. Important variables include:
 
 `GET /api/health` reports `demoMode`, configured provider status, and available ASR providers.
 
-## 10. Tests And CI
+## 10. Observability
+
+HTTP requests pass through a lightweight observability middleware. The backend accepts or generates `X-Request-ID`, returns it on the response, and injects it into log records through context variables. Logs use stable key/value fields for `request_id`, `meeting_id`, `job_id`, and `provider` so upload jobs, worker retries, and provider failures can be correlated without parsing message text.
+
+`ObservabilityService` keeps process-local counters for request status codes and provider operations. Provider operation metrics are grouped by `operation` and `provider`, tracking count, error count, and latency aggregates for upload ASR, live ASR startup/fallback, translation, analysis, summary, and rolling summary paths. The counters are intentionally in memory and reset on backend restart.
+
+`GET /api/diagnostics` returns service uptime, request counters, provider operation counters, configured provider status, and a SQLite upload queue summary. The queue summary includes status counts, eligible queued jobs, delayed retries, processing jobs, stale processing claims, oldest queued age, and jobs with recorded last errors. Diagnostics do not include secrets, transcript text, absolute audio paths, or queue payload paths.
+
+## 11. Tests And CI
 
 Backend tests use pytest and must run through `backend/.venv`. Existing coverage includes:
 
@@ -169,7 +177,7 @@ The frontend uses Vitest with React Testing Library for interaction coverage. Cu
 
 The Windows-first CI workflow installs backend and frontend dependencies, runs backend pytest, runs frontend tests, and builds the Vite frontend.
 
-## 11. Demo Screenshot Refresh
+## 12. Demo Screenshot Refresh
 
 Demo UI screenshots live in `docs/assets/screenshots/` and are linked from both README files. Refresh them only from demo mode so the images do not require external provider keys.
 
@@ -183,13 +191,13 @@ Recommended flow:
 
 If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgraded for screenshot refreshes; use the dependency already present in `frontend/node_modules`.
 
-## 12. Current Boundaries
+## 13. Current Boundaries
 
 - Live rolling summaries are provisional and not persisted; the final summary is still generated after finalize or upload completion.
 - Translation supports one target language per meeting.
 - Mobile background and lock-screen recording is still controlled by the operating system and browser; the frontend detects common interruptions but cannot guarantee capture while suspended.
 - Raw audio is not stored in meeting history.
-- Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Upload jobs now have bounded retry, backoff, and stale-claim recovery; broader observability remains future work.
+- Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Upload jobs now have bounded retry, backoff, stale-claim recovery, and local diagnostics; external monitoring and alerting remain future work.
 - Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.

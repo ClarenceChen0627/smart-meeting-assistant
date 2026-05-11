@@ -32,10 +32,59 @@ Language:
 }
 ```
 
+## Diagnostics
+
+`GET /api/diagnostics`
+
+返回本地运行诊断快照，用于自部署排障。指标只保存在当前进程内，后端重启后清零。响应不会包含 secret、转写文本、音频路径或本地 payload 路径。
+
+```json
+{
+  "service": {
+    "name": "Smart Meeting Assistant Backend",
+    "version": "2.0.0",
+    "demoMode": true,
+    "startedAt": "2026-05-11T08:00:00Z",
+    "uptimeSeconds": 123.45,
+    "timestamp": "2026-05-11T08:02:03Z"
+  },
+  "requests": {
+    "total": 42,
+    "byStatus": { "200": 40, "202": 2 }
+  },
+  "providers": {
+    "statuses": [{ "provider": "demo", "configured": true }],
+    "operations": [
+      {
+        "operation": "upload_asr",
+        "provider": "demo",
+        "count": 2,
+        "error_count": 0,
+        "average_latency_seconds": 0.01,
+        "max_latency_seconds": 0.02,
+        "total_latency_seconds": 0.02
+      }
+    ]
+  },
+  "uploadQueue": {
+    "byStatus": { "queued": 1, "completed": 2 },
+    "eligibleQueued": 1,
+    "delayedRetry": 0,
+    "processing": 0,
+    "staleProcessing": 0,
+    "oldestQueuedAgeSeconds": 12.3,
+    "lastErrorCount": 0
+  }
+}
+```
+
+所有 HTTP 响应都会带 `X-Request-ID` header。客户端也可以主动传入同名 header，让后端日志复用该 request id。
+
 ## HTTP Endpoints
 
 - `GET /`
 - `GET /api/health`
+- `GET /api/diagnostics`
 - `GET /api/glossary/terms`
 - `POST /api/glossary/terms`
 - `PATCH /api/glossary/terms/{term_id}`

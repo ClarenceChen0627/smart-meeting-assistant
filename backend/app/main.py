@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.glossary import router as glossary_router
 from app.api.meetings import router as meetings_router
@@ -20,6 +21,7 @@ from app.clients.demo_dashscope_client import DemoDashScopeClient
 from app.clients.volcengine_asr_client import VolcengineASRClient
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.middleware.observability import observability_middleware
 from app.services.audio_codec_service import AudioCodecService
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
@@ -29,6 +31,7 @@ from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService
 from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.raw_audio_retention_service import RawAudioRetentionService
+from app.services.observability_service import ObservabilityService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
@@ -61,6 +64,7 @@ async def lifespan(app: FastAPI):
     meeting_analysis_service = MeetingAnalysisService(dashscope_client)
     translation_service = TranslationService(dashscope_client)
     raw_audio_retention_service = RawAudioRetentionService(settings)
+    observability_service = ObservabilityService()
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
     upload_queue_store = UploadQueueStore(
         db_path=settings.resolved_meeting_history_db_path,
@@ -85,6 +89,7 @@ async def lifespan(app: FastAPI):
         upload_queue_store=upload_queue_store,
         embedded_worker_enabled=settings.upload_queue_embedded_worker_enabled,
         upload_queue_processing_timeout_seconds=settings.upload_queue_processing_timeout_seconds,
+        observability_service=observability_service,
     )
     session_manager = SessionManager(
         settings=settings,
@@ -98,6 +103,7 @@ async def lifespan(app: FastAPI):
         translation_service=translation_service,
         meeting_history_service=meeting_history_service,
         glossary_service=glossary_service,
+        observability_service=observability_service,
     )
 
     app.state.settings = settings
@@ -117,6 +123,7 @@ async def lifespan(app: FastAPI):
     app.state.glossary_service = glossary_service
     app.state.glossary_store_service = glossary_store_service
     app.state.raw_audio_retention_service = raw_audio_retention_service
+    app.state.observability_service = observability_service
     app.state.upload_queue_store = upload_queue_store
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service
@@ -183,6 +190,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.middleware("http")(observability_middleware)
+
+app.include_router(diagnostics_router)
 app.include_router(health_router)
 app.include_router(glossary_router)
 app.include_router(meetings_router)

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from time import perf_counter
 from collections.abc import Awaitable, Callable
 from typing import TypeVar, cast
 from uuid import uuid4
 
+from app.core.logging import correlation_context
 from app.schemas.glossary import GlossaryTerm
 from app.schemas.meeting_history import (
     MeetingProcessingStage,
@@ -22,6 +24,7 @@ from app.services.glossary_service import GlossaryService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.raw_audio_retention_service import RawAudioRetentionService
+from app.services.observability_service import ObservabilityService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
@@ -50,6 +53,7 @@ class UploadMeetingService:
         upload_queue_store: UploadQueueStore,
         embedded_worker_enabled: bool = True,
         upload_queue_processing_timeout_seconds: float = 1800.0,
+        observability_service: ObservabilityService | None = None,
         upload_queue_worker: UploadQueueWorker | None = None,
     ) -> None:
         self._asr_provider_service = asr_provider_service
@@ -65,6 +69,7 @@ class UploadMeetingService:
         self._upload_queue_store = upload_queue_store
         self._embedded_worker_enabled = embedded_worker_enabled
         self._upload_queue_processing_timeout_seconds = upload_queue_processing_timeout_seconds
+        self._observability_service = observability_service
         self._upload_queue_worker = upload_queue_worker or UploadQueueWorker(
             name="upload-meetings",
             store=upload_queue_store,
@@ -152,26 +157,27 @@ class UploadMeetingService:
         return await self._upload_queue_worker.process_available_jobs()
 
     async def process_upload_job(self, job: UploadJob) -> str | None:
-        try:
-            audio_data = job.payload_path.read_bytes()
-            self._meeting_history_service.mark_processing(job.meeting_id, MeetingProcessingStage.TRANSCRIBING)
-            await self._process_upload(
-                meeting_id=job.meeting_id,
-                audio_data=audio_data,
-                filename=job.filename,
-                content_type=job.content_type,
-                scene=job.scene,
-                target_lang=job.target_lang,
-                initial_provider=job.provider,
-                glossary_terms=job.glossary_terms,
-            )
-            return None
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Upload meeting processing failed for %s", job.meeting_id)
-            message = str(exc).strip() or exc.__class__.__name__
-            return message
+        with correlation_context(meeting_id=job.meeting_id, job_id=job.meeting_id, provider=job.provider):
+            try:
+                audio_data = job.payload_path.read_bytes()
+                self._meeting_history_service.mark_processing(job.meeting_id, MeetingProcessingStage.TRANSCRIBING)
+                await self._process_upload(
+                    meeting_id=job.meeting_id,
+                    audio_data=audio_data,
+                    filename=job.filename,
+                    content_type=job.content_type,
+                    scene=job.scene,
+                    target_lang=job.target_lang,
+                    initial_provider=job.provider,
+                    glossary_terms=job.glossary_terms,
+                )
+                return None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Upload meeting processing failed.")
+                message = str(exc).strip() or exc.__class__.__name__
+                return message
 
     async def shutdown(self) -> None:
         await self._upload_queue_worker.shutdown()
@@ -228,10 +234,14 @@ class UploadMeetingService:
         self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.ANALYZING)
         analysis = await self._run_with_runtime_retries(
             "upload analysis",
-            lambda: self._meeting_analysis_service.analyze_meeting(
-                transcripts,
-                scene,
-                glossary_terms=glossary_terms,
+            lambda: self._recorded_operation(
+                operation_name="upload_analysis",
+                provider="dashscope",
+                call=lambda: self._meeting_analysis_service.analyze_meeting(
+                    transcripts,
+                    scene,
+                    glossary_terms=glossary_terms,
+                ),
             ),
         )
         self._meeting_history_service.update_analysis(meeting_id, analysis)
@@ -239,10 +249,14 @@ class UploadMeetingService:
         self._meeting_history_service.mark_processing(meeting_id, MeetingProcessingStage.SUMMARIZING)
         summary = await self._run_with_runtime_retries(
             "upload summary",
-            lambda: self._summary_service.generate_summary(
-                transcripts,
-                scene,
-                glossary_terms=glossary_terms,
+            lambda: self._recorded_operation(
+                operation_name="upload_summary",
+                provider="dashscope",
+                call=lambda: self._summary_service.generate_summary(
+                    transcripts,
+                    scene,
+                    glossary_terms=glossary_terms,
+                ),
             ),
         )
         self._meeting_history_service.update_summary(meeting_id, summary)
@@ -254,13 +268,42 @@ class UploadMeetingService:
         preferred_provider: str | None,
     ) -> tuple[list[TranscriptItem], str]:
         selection = self._asr_provider_service.resolve_provider(preferred_provider)
+        started_at = perf_counter()
         try:
             segments = await selection.client.transcribe_wav(wav_audio)
+            self._record_provider_operation(
+                operation="upload_asr",
+                provider=selection.provider_name,
+                latency_seconds=perf_counter() - started_at,
+                success=True,
+            )
         except RuntimeError as exc:
+            self._record_provider_operation(
+                operation="upload_asr",
+                provider=selection.provider_name,
+                latency_seconds=perf_counter() - started_at,
+                success=False,
+            )
             fallback = self._asr_provider_service.resolve_fallback(selection.provider_name)
             if fallback is None:
                 raise RuntimeError(str(exc)) from exc
-            segments = await fallback.client.transcribe_wav(wav_audio)
+            fallback_started_at = perf_counter()
+            try:
+                segments = await fallback.client.transcribe_wav(wav_audio)
+            except RuntimeError:
+                self._record_provider_operation(
+                    operation="upload_asr",
+                    provider=fallback.provider_name,
+                    latency_seconds=perf_counter() - fallback_started_at,
+                    success=False,
+                )
+                raise
+            self._record_provider_operation(
+                operation="upload_asr",
+                provider=fallback.provider_name,
+                latency_seconds=perf_counter() - fallback_started_at,
+                success=True,
+            )
             selection = fallback
 
         transcripts = [
@@ -300,6 +343,49 @@ class UploadMeetingService:
 
         raise RuntimeError(f"{operation_name} failed after retry.")
 
+    async def _recorded_operation(
+        self,
+        *,
+        operation_name: str,
+        provider: str,
+        call: Callable[[], Awaitable[T]],
+    ) -> T:
+        started_at = perf_counter()
+        try:
+            result = await call()
+        except Exception:
+            self._record_provider_operation(
+                operation=operation_name,
+                provider=provider,
+                latency_seconds=perf_counter() - started_at,
+                success=False,
+            )
+            raise
+        self._record_provider_operation(
+            operation=operation_name,
+            provider=provider,
+            latency_seconds=perf_counter() - started_at,
+            success=True,
+        )
+        return result
+
+    def _record_provider_operation(
+        self,
+        *,
+        operation: str,
+        provider: str,
+        latency_seconds: float,
+        success: bool,
+    ) -> None:
+        if self._observability_service is None:
+            return
+        self._observability_service.record_provider_operation(
+            operation=operation,
+            provider=provider,
+            latency_seconds=latency_seconds,
+            success=success,
+        )
+
     async def _translate_transcripts(
         self,
         *,
@@ -309,9 +395,13 @@ class UploadMeetingService:
     ) -> None:
         for transcript in transcripts:
             try:
-                translated_text = await self._translation_service.translate_text(
-                    text=transcript.text,
-                    target_lang=target_lang,
+                translated_text = await self._recorded_operation(
+                    operation_name="upload_translation",
+                    provider="dashscope",
+                    call=lambda: self._translation_service.translate_text(
+                        text=transcript.text,
+                        target_lang=target_lang,
+                    ),
                 )
             except (RuntimeError, ValueError) as exc:
                 logger.warning(
