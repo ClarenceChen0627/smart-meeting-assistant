@@ -17,6 +17,7 @@ from app.schemas.meeting_history import (
     MeetingHistoryListItem,
     MeetingHistoryStatus,
     MeetingHistoryTranscriptItem,
+    MeetingMetadataUpdate,
     MeetingProcessingStage,
     MeetingRecord,
     MeetingSpeakerUpdate,
@@ -81,10 +82,13 @@ class MeetingHistoryService:
                     raw_audio_filename,
                     raw_audio_content_type,
                     raw_audio_size_bytes,
+                    favorite,
+                    archived,
+                    tags_json,
                     glossary_terms_json,
                     summary_json,
                     analysis_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, 0, '', ?, ?, ?, 0, NULL, NULL, NULL, NULL, ?, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, 0, '', ?, ?, ?, 0, NULL, NULL, NULL, NULL, 0, 0, NULL, ?, NULL, NULL)
                 """,
                 (
                     meeting_id,
@@ -553,10 +557,85 @@ class MeetingHistoryService:
                 (provider, _utc_now_iso(), meeting_id),
             )
 
-    def list_meetings(self) -> list[MeetingHistoryListItem]:
+    def update_metadata(self, meeting_id: str, update: MeetingMetadataUpdate) -> MeetingRecord | None:
+        assignments: list[str] = []
+        parameters: list[object] = []
+        if update.favorite is not None:
+            assignments.append("favorite = ?")
+            parameters.append(int(update.favorite))
+        if update.archived is not None:
+            assignments.append("archived = ?")
+            parameters.append(int(update.archived))
+        if update.tags is not None:
+            assignments.append("tags_json = ?")
+            parameters.append(self._dump_tags(update.tags))
+        if not assignments:
+            return self.get_meeting(meeting_id)
+
+        assignments.append("updated_at = ?")
+        parameters.append(_utc_now_iso())
+        parameters.append(meeting_id)
+        with self._connect() as connection:
+            updated = connection.execute(
+                f"""
+                UPDATE meetings
+                SET {", ".join(assignments)}
+                WHERE meeting_id = ?
+                """,
+                parameters,
+            ).rowcount
+
+        if updated == 0:
+            return None
+        return self.get_meeting(meeting_id)
+
+    def list_meetings(
+        self,
+        *,
+        q: str | None = None,
+        status: str | None = None,
+        source_type: str | None = None,
+        provider: str | None = None,
+        scene: str | None = None,
+        favorite: bool | None = None,
+        archived: bool | None = False,
+        tag: str | None = None,
+    ) -> list[MeetingHistoryListItem]:
+        where_clauses: list[str] = []
+        parameters: list[object] = []
+        if normalized_q := self._normalize_filter_text(q):
+            like_value = f"%{normalized_q.lower()}%"
+            where_clauses.append(
+                """
+                (
+                    lower(title) LIKE ?
+                    OR lower(preview_text) LIKE ?
+                    OR lower(source_name) LIKE ?
+                    OR lower(meeting_id) LIKE ?
+                )
+                """
+            )
+            parameters.extend([like_value, like_value, like_value, like_value])
+        for column, value in (
+            ("status", status),
+            ("source_type", source_type),
+            ("provider", provider),
+            ("scene", scene),
+        ):
+            if normalized_value := self._normalize_filter_text(value):
+                where_clauses.append(f"{column} = ?")
+                parameters.append(normalized_value)
+        if favorite is not None:
+            where_clauses.append("favorite = ?")
+            parameters.append(int(favorite))
+        if archived is not None:
+            where_clauses.append("archived = ?")
+            parameters.append(int(archived))
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         with self._connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     meeting_id,
                     status,
@@ -577,12 +656,24 @@ class MeetingHistoryService:
                     raw_audio_retained,
                     raw_audio_filename,
                     raw_audio_content_type,
-                    raw_audio_size_bytes
+                    raw_audio_size_bytes,
+                    favorite,
+                    archived,
+                    tags_json
                 FROM meetings
+                {where_sql}
                 ORDER BY updated_at DESC, created_at DESC
-                """
+                """,
+                parameters,
             ).fetchall()
-        return [MeetingHistoryListItem.model_validate(dict(row)) for row in rows]
+        meetings = [self._list_item_from_row(row) for row in rows]
+        if normalized_tag := self._normalize_filter_text(tag):
+            return [
+                meeting
+                for meeting in meetings
+                if any(tag_value.lower() == normalized_tag.lower() for tag_value in meeting.tags)
+            ]
+        return meetings
 
     def get_meeting(self, meeting_id: str) -> MeetingRecord | None:
         with self._connect() as connection:
@@ -610,6 +701,9 @@ class MeetingHistoryService:
                     raw_audio_filename,
                     raw_audio_content_type,
                     raw_audio_size_bytes,
+                    favorite,
+                    archived,
+                    tags_json,
                     glossary_terms_json,
                     summary_json,
                     analysis_json
@@ -663,6 +757,9 @@ class MeetingHistoryService:
             raw_audio_filename=meeting_row["raw_audio_filename"],
             raw_audio_content_type=meeting_row["raw_audio_content_type"],
             raw_audio_size_bytes=meeting_row["raw_audio_size_bytes"],
+            favorite=bool(meeting_row["favorite"]),
+            archived=bool(meeting_row["archived"]),
+            tags=self._load_tags(meeting_row["tags_json"]),
             glossary_terms=self._load_glossary_terms(meeting_row["glossary_terms_json"]),
             transcripts=[
                 MeetingHistoryTranscriptItem(
@@ -748,6 +845,9 @@ class MeetingHistoryService:
                     raw_audio_filename TEXT,
                     raw_audio_content_type TEXT,
                     raw_audio_size_bytes INTEGER,
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    tags_json TEXT,
                     glossary_terms_json TEXT,
                     summary_json TEXT,
                     analysis_json TEXT
@@ -806,6 +906,12 @@ class MeetingHistoryService:
             connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_content_type TEXT")
         if "raw_audio_size_bytes" not in columns:
             connection.execute("ALTER TABLE meetings ADD COLUMN raw_audio_size_bytes INTEGER")
+        if "favorite" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+        if "archived" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        if "tags_json" not in columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN tags_json TEXT")
         if "glossary_terms_json" not in columns:
             connection.execute("ALTER TABLE meetings ADD COLUMN glossary_terms_json TEXT")
 
@@ -1004,6 +1110,21 @@ class MeetingHistoryService:
     def _clean_string_list(items: list[str]) -> list[str]:
         return [normalized for item in items if (normalized := " ".join(item.split()))]
 
+    @staticmethod
+    def _normalize_filter_text(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.split()).strip()
+        return normalized or None
+
+    @classmethod
+    def _list_item_from_row(cls, row: sqlite3.Row) -> MeetingHistoryListItem:
+        payload = dict(row)
+        payload["favorite"] = bool(payload.get("favorite"))
+        payload["archived"] = bool(payload.get("archived"))
+        payload["tags"] = cls._load_tags(payload.pop("tags_json", None))
+        return MeetingHistoryListItem.model_validate(payload)
+
     @classmethod
     def _build_meeting_title(cls, summary: MeetingSummary) -> str:
         candidates = [
@@ -1039,6 +1160,42 @@ class MeetingHistoryService:
         if not terms:
             return None
         return json.dumps([term.model_dump() for term in terms])
+
+    @classmethod
+    def _dump_tags(cls, tags: list[str]) -> str | None:
+        cleaned = cls._clean_tags(tags)
+        return json.dumps(cleaned) if cleaned else None
+
+    @staticmethod
+    def _clean_tags(tags: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            normalized = " ".join(tag.split()).strip()
+            if not normalized:
+                continue
+            if len(normalized) > 32:
+                raise ValueError("Meeting tags must be 32 characters or fewer.")
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(normalized)
+            if len(cleaned) >= 20:
+                break
+        return cleaned
+
+    @staticmethod
+    def _load_tags(value: str | None) -> list[str]:
+        if not value:
+            return []
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, str)]
 
     @staticmethod
     def _load_glossary_terms(value: str | None) -> list[GlossaryTerm]:

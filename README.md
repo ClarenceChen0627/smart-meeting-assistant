@@ -55,6 +55,13 @@ Open:
 - Frontend: `http://localhost:5173`
 - Backend health: `http://localhost:8080/api/health`
 
+Optional configuration check:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe tools\check_config.py
+```
+
 ### 2. Run with real providers
 
 Copy `.env.example` to `.env`, add provider credentials, and choose:
@@ -160,6 +167,7 @@ docker-compose up --build
 
 - [Architecture](docs/architecture.md): system overview, realtime flow, upload flow, and meeting state diagrams.
 - [Configuration](docs/configuration.md): demo mode, provider variables, frontend overrides, and minimum setup matrix.
+- [Deployment](docs/deployment.md): HTTPS, reverse proxy, token protection, Docker, and production notes ([中文](docs/zh/deployment.md)).
 - [Quality Evaluation](docs/quality-evaluation.md): local real-provider upload evaluation, provider comparison, cost estimates, and review reports.
 - [Mobile Browser Testing](docs/mobile-testing.md): LAN, HTTPS, microphone, and WebSocket notes for phone validation.
 - [API Reference](docs/api.md): HTTP endpoints, WebSocket messages, and meeting record fields.
@@ -167,6 +175,9 @@ docker-compose up --build
 - [diart Setup](docs/diart.md): detailed Windows setup notes for realtime diart speaker updates ([中文](docs/zh/diart.md)).
 - [Requirements](docs/requirements/project-requirements.md): original project requirements and implementation comparison ([comparison](docs/requirements/requirements-comparison.md), [中文](docs/zh/requirements/project-requirements.md), [中文对比](docs/zh/requirements/requirements-comparison.md)).
 - [Technical Implementation](docs/technical-implementation.md): English implementation notes.
+- [Smoke Testing](docs/smoke-testing.md): demo-mode validation flow ([中文](docs/zh/smoke-testing.md)).
+- [Release Checklist](docs/release-checklist.md): pre-release checks ([中文](docs/zh/release-checklist.md)).
+- [Changelog](CHANGELOG.md): notable unreleased and released changes.
 - [中文技术实现](docs/zh/technical-implementation.md): Chinese implementation notes.
 
 ## Demo Screenshots
@@ -184,12 +195,15 @@ docker-compose up --build
 - Mobile background and lock-screen recording remains limited by the operating system and browser; the frontend detects common interruptions and warns the user.
 - Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs now have bounded retry, backoff, stale recovery, and local diagnostics; external monitoring and alerting are still future work.
 - Edit audit history is stored locally for successful manual edits; account actors, retention policy, and version restore remain future governance work.
+- Self-hosted token protection is a basic private deployment guard, not a multi-user account or role system.
+- WebSocket token authentication uses a query parameter, so production proxies should avoid retaining query strings in access logs.
+- Export delivery is Markdown-first; Word and PDF generation are not included in this release.
 
 ## Roadmap
 
-- Short term: real-meeting upload quality evaluation package is established for private audio manifests, local provider runs, automated checks, and manual review reports.
-- Medium term: real-meeting accuracy and correction workflows are implemented, including persistent glossaries, speaker rename/merge, mobile recording reliability, and rolling in-meeting summaries.
-- Long term: quality governance and production reliability are implemented, including provider quality/cost evaluation, SQLite-backed upload queues, task recovery, local observability, and edit audit history.
+- Quality-first roadmap: complete. Real-meeting upload quality evaluation, glossary correction, speaker edits, mobile reliability, rolling summaries, provider quality/cost evaluation, persistent upload queues, task recovery, local observability, and edit audit history are implemented.
+- Launch-readiness roadmap: complete on the current feature branch. Deployment/configuration docs, config checks, optional token protection, upload guardrails, meeting asset management, Markdown delivery exports, and release-readiness docs are implemented.
+- Next candidates: multi-user accounts and roles, team-owned meetings/glossaries/provider settings, external monitoring and alerting, retention/version restore governance, and optional Word/PDF export.
 
 ## License
 

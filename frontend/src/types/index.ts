@@ -185,6 +185,9 @@ export interface MeetingHistoryListItem {
   raw_audio_filename: string | null
   raw_audio_content_type: string | null
   raw_audio_size_bytes: number | null
+  favorite: boolean
+  archived: boolean
+  tags: string[]
 }
 
 export interface MeetingRecord extends MeetingHistoryListItem {

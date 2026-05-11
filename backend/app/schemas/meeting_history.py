@@ -56,6 +56,13 @@ class MeetingHistoryListItem(BaseModel):
     processing_stage: MeetingProcessingStage | None = None
     error_message: str | None = None
     source_name: str | None = None
+    raw_audio_retained: bool = False
+    raw_audio_filename: str | None = None
+    raw_audio_content_type: str | None = None
+    raw_audio_size_bytes: int | None = None
+    favorite: bool = False
+    archived: bool = False
+    tags: list[str] = Field(default_factory=list)
 
 
 class MeetingHistoryTranscriptItem(TranscriptItem):
@@ -92,10 +99,9 @@ class MeetingRecord(BaseModel):
     raw_audio_filename: str | None = None
     raw_audio_content_type: str | None = None
     raw_audio_size_bytes: int | None = None
-    raw_audio_retained: bool = False
-    raw_audio_filename: str | None = None
-    raw_audio_content_type: str | None = None
-    raw_audio_size_bytes: int | None = None
+    favorite: bool = False
+    archived: bool = False
+    tags: list[str] = Field(default_factory=list)
     glossary_terms: list[GlossaryTerm] = Field(default_factory=list)
     transcripts: list[MeetingHistoryTranscriptItem] = Field(default_factory=list)
     summary: MeetingSummary | None = None
@@ -104,6 +110,12 @@ class MeetingRecord(BaseModel):
 
 class MeetingTitleUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+
+
+class MeetingMetadataUpdate(BaseModel):
+    favorite: bool | None = None
+    archived: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
 
 
 class SpeakerLabelUpdate(BaseModel):

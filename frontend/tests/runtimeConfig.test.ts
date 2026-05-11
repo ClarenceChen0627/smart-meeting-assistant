@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApiBaseUrl, buildWebSocketBaseUrl, buildWebSocketUrl } from '../src/app/runtimeConfig';
+import {
+  apiFetch,
+  buildApiBaseUrl,
+  buildWebSocketBaseUrl,
+  buildWebSocketUrl,
+  setApiAccessToken,
+} from '../src/app/runtimeConfig';
 
 const setWindowLocation = (url: string) => {
   Object.defineProperty(window, 'location', {
@@ -12,10 +18,12 @@ const setWindowLocation = (url: string) => {
 beforeEach(() => {
   vi.stubEnv('VITE_API_BASE_URL', '');
   vi.stubEnv('VITE_WS_BASE_URL', '');
+  window.localStorage.clear();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('runtimeConfig', () => {
@@ -51,5 +59,26 @@ describe('runtimeConfig', () => {
 
     expect(buildApiBaseUrl()).toBe('');
     expect(buildWebSocketBaseUrl()).toBe('ws://192.168.1.23:5173');
+  });
+
+  it('adds the saved API token to WebSocket URLs and fetch headers', async () => {
+    setWindowLocation('http://localhost:5173/');
+    setApiAccessToken('secret-token');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+
+    expect(buildWebSocketUrl('general', 'en', 'demo', '')).toBe(
+      'ws://localhost:5173/ws/meeting?scene=general&target_lang=en&provider=demo&access_token=secret-token'
+    );
+
+    await apiFetch('/api/meetings', {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    const headers = init.headers as Headers;
+    expect(headers.get('Authorization')).toBe('Bearer secret-token');
+    expect(headers.get('Content-Type')).toBe('application/json');
   });
 });

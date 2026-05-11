@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildMeetingNotesFilename, buildMeetingNotesMarkdown } from '../src/app/meetingNotesExport';
+import { buildActionItemsMarkdown, buildMeetingNotesFilename, buildMeetingNotesMarkdown } from '../src/app/meetingNotesExport';
 import type { MeetingSummary, TranscriptItem } from '../src/types';
 
 const summary: MeetingSummary = {
@@ -77,6 +77,33 @@ describe('meeting notes export', () => {
     });
 
     expect(markdown.startsWith('# Saved Customer Review')).toBe(true);
+  });
+
+  it('builds the Chinese meeting minutes template', () => {
+    const markdown = buildMeetingNotesMarkdown({
+      summary,
+      transcripts,
+      meetingDate: '2026-05-08T01:00:00Z',
+      template: 'chinese_minutes',
+    });
+
+    expect(markdown).toContain('# Launch Plan Review');
+    expect(markdown).toContain('## 会议概览');
+    expect(markdown).toContain('## 后续行动');
+    expect(markdown).toContain('负责人: Speaker 1');
+  });
+
+  it('builds an action item only export', () => {
+    const markdown = buildActionItemsMarkdown({
+      summary,
+      transcripts,
+      meetingDate: '2026-05-08T01:00:00Z',
+    });
+
+    expect(markdown).toContain('# Launch Plan Review - Action Items');
+    expect(markdown).toContain('| Task | Owner | Deadline | Status | Source | Confidence |');
+    expect(markdown).toContain('| Send the final launch checklist | Speaker 1 | Friday | pending | 01:05 | 92% |');
+    expect(markdown).not.toContain('Consider a later retro');
   });
 
   it('sanitizes exported filenames', () => {

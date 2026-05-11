@@ -6,6 +6,22 @@ Language:
 
 后端默认地址：`http://localhost:8080`。
 
+## Authentication
+
+当 `API_ACCESS_TOKEN` 为空时，本地开发行为保持不变。设置后，除 `/` 和 `/api/health` 外，其他接口都需要以下任一 header：
+
+```http
+Authorization: Bearer <token>
+```
+
+或：
+
+```http
+X-API-Token: <token>
+```
+
+浏览器 WebSocket 连接需要通过 `access_token=<token>` 传递 token，因为浏览器 WebSocket API 不能设置自定义 header。
+
 ## Health
 
 `GET /api/health`
@@ -90,9 +106,10 @@ Language:
 - `PATCH /api/glossary/terms/{term_id}`
 - `DELETE /api/glossary/terms/{term_id}`
 - `GET /api/audit-events`
-- `GET /api/meetings`
+- `GET /api/meetings?q=&status=&source_type=&provider=&scene=&favorite=&archived=&tag=`
 - `GET /api/meetings/{meeting_id}`
 - `GET /api/meetings/{meeting_id}/audit-events`
+- `PATCH /api/meetings/{meeting_id}/metadata`
 - `PATCH /api/meetings/{meeting_id}/title`
 - `PATCH /api/meetings/{meeting_id}/summary`
 - `PATCH /api/meetings/{meeting_id}/speakers`
@@ -206,6 +223,8 @@ Multipart 字段：
 
 接口返回 `202 Accepted` 和一个 `MeetingRecord`。前端应轮询 `GET /api/meetings/{meeting_id}`，直到 `status` 变为 `finalized` 或 `failed`。
 
+当上传超过 `MAX_UPLOAD_BYTES` 时返回 `413`；当 content type 不在 `ALLOWED_UPLOAD_CONTENT_TYPES` 中时返回 `415`。
+
 ## WebSocket
 
 连接示例：
@@ -214,6 +233,7 @@ Multipart 字段：
 ws://localhost:8080/ws/meeting?scene=general&target_lang=en&provider=volcengine
 ws://localhost:8080/ws/meeting?scene=general&target_lang=ja&provider=demo
 ws://localhost:8080/ws/meeting?scene=general&provider=dashscope&glossary_terms=queue%20wen%3D%3EQwen
+ws://localhost:8080/ws/meeting?scene=general&provider=demo&access_token=your-token
 ```
 
 客户端发送原始 PCM 音频 bytes。结束实时会议时发送：
@@ -364,3 +384,18 @@ ws://localhost:8080/ws/meeting?scene=general&provider=dashscope&glossary_terms=q
 - `glossary_terms`：本次会议实际使用并保存的术语。
 - `summary_manually_edited`：用户编辑 summary 字段后为 true。
 - `title_manually_edited`：用户重命名保存会议后为 true。
+- `favorite`：用户是否将会议标记为重要。
+- `archived`：会议是否从默认 active 历史视图中隐藏。
+- `tags`：用户维护的会议标签，用于筛选和整理。
+
+`PATCH /api/meetings/{meeting_id}/metadata`
+
+更新轻量会议整理元数据：
+
+```json
+{
+  "favorite": true,
+  "archived": false,
+  "tags": ["Customer", "Q2"]
+}
+```

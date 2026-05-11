@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
+from app.api.upload_validation import read_validated_upload
+from app.core.config import settings as default_settings
 from app.schemas.transcript import TranscriptItem
 
 router = APIRouter()
 
 
 async def _transcribe_upload(request: Request, file: UploadFile) -> list[TranscriptItem]:
-    audio_data = await file.read()
-    if not audio_data:
-        raise HTTPException(status_code=400, detail="Audio upload is empty.")
+    runtime_settings = getattr(request.app.state, "settings", default_settings)
+    audio_data = await read_validated_upload(file, runtime_settings)
 
     try:
         wav_audio = await request.app.state.audio_codec_service.convert_upload_to_wav(

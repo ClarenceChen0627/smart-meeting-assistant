@@ -1,8 +1,16 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 
-from app.schemas.meeting_history import MeetingHistoryListItem, MeetingRecord, MeetingSpeakerUpdate, MeetingTitleUpdate
+from app.api.upload_validation import read_validated_upload
+from app.core.config import settings as default_settings
+from app.schemas.meeting_history import (
+    MeetingHistoryListItem,
+    MeetingMetadataUpdate,
+    MeetingRecord,
+    MeetingSpeakerUpdate,
+    MeetingTitleUpdate,
+)
 from app.schemas.summary import ActionItemStatusUpdate, SummaryUpdate
 from app.services.audit_log_service import AuditLogService
 
@@ -23,7 +31,8 @@ async def upload_meeting(
     retain_raw_audio: bool = Form(False),
     glossary_terms: str | None = Form(None),
 ) -> MeetingRecord:
-    audio_data = await file.read()
+    runtime_settings = getattr(request.app.state, "settings", default_settings)
+    audio_data = await read_validated_upload(file, runtime_settings)
     try:
         return await request.app.state.upload_meeting_service.start_upload(
             audio_data=audio_data,
@@ -40,13 +49,48 @@ async def upload_meeting(
 
 
 @router.get("/api/meetings", response_model=list[MeetingHistoryListItem])
-async def list_meetings(request: Request) -> list[MeetingHistoryListItem]:
-    return request.app.state.meeting_history_service.list_meetings()
+async def list_meetings(
+    request: Request,
+    q: str | None = Query(None),
+    status: str | None = Query(None),
+    source_type: str | None = Query(None),
+    provider: str | None = Query(None),
+    scene: str | None = Query(None),
+    favorite: bool | None = Query(None),
+    archived: bool | None = Query(False),
+    tag: str | None = Query(None),
+) -> list[MeetingHistoryListItem]:
+    return request.app.state.meeting_history_service.list_meetings(
+        q=q,
+        status=status,
+        source_type=source_type,
+        provider=provider,
+        scene=scene,
+        favorite=favorite,
+        archived=archived,
+        tag=tag,
+    )
 
 
 @router.get("/api/meetings/{meeting_id}", response_model=MeetingRecord)
 async def get_meeting(request: Request, meeting_id: str) -> MeetingRecord:
     meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="Meeting record not found.")
+    return meeting
+
+
+@router.patch("/api/meetings/{meeting_id}/metadata", response_model=MeetingRecord)
+async def update_meeting_metadata(
+    request: Request,
+    meeting_id: str,
+    payload: MeetingMetadataUpdate,
+) -> MeetingRecord:
+    try:
+        meeting = request.app.state.meeting_history_service.update_metadata(meeting_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if meeting is None:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
     return meeting

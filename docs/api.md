@@ -6,6 +6,22 @@ Language:
 
 Backend base URL: `http://localhost:8080`.
 
+## Authentication
+
+When `API_ACCESS_TOKEN` is empty, local development behavior is unchanged. When it is set, all endpoints except `/` and `/api/health` require either:
+
+```http
+Authorization: Bearer <token>
+```
+
+or:
+
+```http
+X-API-Token: <token>
+```
+
+Browser WebSocket connections must pass the token as `access_token=<token>` because browser WebSocket APIs cannot set custom headers.
+
 ## Health
 
 `GET /api/health`
@@ -90,9 +106,10 @@ Every HTTP response includes an `X-Request-ID` header. Clients may send the same
 - `PATCH /api/glossary/terms/{term_id}`
 - `DELETE /api/glossary/terms/{term_id}`
 - `GET /api/audit-events`
-- `GET /api/meetings`
+- `GET /api/meetings?q=&status=&source_type=&provider=&scene=&favorite=&archived=&tag=`
 - `GET /api/meetings/{meeting_id}`
 - `GET /api/meetings/{meeting_id}/audit-events`
+- `PATCH /api/meetings/{meeting_id}/metadata`
 - `PATCH /api/meetings/{meeting_id}/title`
 - `PATCH /api/meetings/{meeting_id}/summary`
 - `PATCH /api/meetings/{meeting_id}/speakers`
@@ -206,6 +223,8 @@ Multipart fields:
 
 Returns `202 Accepted` with a `MeetingRecord`. The frontend should poll `GET /api/meetings/{meeting_id}` until `status` is `finalized` or `failed`.
 
+Uploads are rejected with `413` when they exceed `MAX_UPLOAD_BYTES` and `415` when their content type is not listed in `ALLOWED_UPLOAD_CONTENT_TYPES`.
+
 ## WebSocket
 
 Connect to:
@@ -214,6 +233,7 @@ Connect to:
 ws://localhost:8080/ws/meeting?scene=general&target_lang=en&provider=volcengine
 ws://localhost:8080/ws/meeting?scene=general&target_lang=ja&provider=demo
 ws://localhost:8080/ws/meeting?scene=general&provider=dashscope&glossary_terms=queue%20wen%3D%3EQwen
+ws://localhost:8080/ws/meeting?scene=general&provider=demo&access_token=your-token
 ```
 
 The client sends raw PCM audio bytes. To finish a live meeting, send:
@@ -380,3 +400,18 @@ Important fields:
 - `glossary_terms`: custom terminology terms saved with the meeting record.
 - `summary_manually_edited`: true after the user edits summary fields.
 - `title_manually_edited`: true after the user renames a saved meeting.
+- `favorite`: true when a user marks the meeting as important.
+- `archived`: true when the meeting is hidden from the default active history view.
+- `tags`: user-managed labels for filtering and organization.
+
+`PATCH /api/meetings/{meeting_id}/metadata`
+
+Updates lightweight meeting organization metadata:
+
+```json
+{
+  "favorite": true,
+  "archived": false,
+  "tags": ["Customer", "Q2"]
+}
+```
