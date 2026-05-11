@@ -4,7 +4,9 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from starlette import status
 
+from app.middleware.security import is_websocket_authorized
 from app.schemas.ws_message import FinalizeControlMessage
 
 router = APIRouter()
@@ -12,6 +14,9 @@ router = APIRouter()
 
 @router.websocket("/ws/meeting")
 async def meeting_websocket(websocket: WebSocket) -> None:
+    if not is_websocket_authorized(websocket):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await websocket.accept()
     scene = websocket.query_params.get("scene", "finance")
     target_lang = websocket.query_params.get("target_lang")

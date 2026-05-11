@@ -23,6 +23,7 @@ Frontend-only URL overrides belong in `frontend/.env.local`, copied from `fronte
 | Demo mode | `DEMO_MODE=1` | No external AI keys required. Use for local smoke tests and CI only. |
 | Browser frontend | `VITE_API_BASE_URL`, `VITE_WS_BASE_URL` only when backend is not `localhost:8080` | Store these in `frontend/.env.local`. |
 | Local backend | `PORT`, `LOG_LEVEL`, `MEETING_HISTORY_DB_PATH` | Defaults are enough for a backend boot. |
+| Private self-hosting | `API_ACCESS_TOKEN`, `CORS_ALLOW_ORIGINS`, `MAX_UPLOAD_BYTES` | Keep token empty only for local development. Use HTTPS in production. |
 | Realtime Volcengine ASR | `DEFAULT_ASR_PROVIDER=volcengine`, `VOLCENGINE_ASR_APP_KEY`, `VOLCENGINE_ASR_ACCESS_KEY`, `VOLCENGINE_ASR_RESOURCE_ID` | Volcengine can return native speaker clustering. |
 | Realtime DashScope ASR | `DEFAULT_ASR_PROVIDER=dashscope`, `DASHSCOPE_API_KEY`, `DASHSCOPE_ASR_MODEL` | Required for DashScope Paraformer realtime ASR. |
 | Translation, summary, analysis | `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_TRANSLATION_MODEL` | Used by translation, summary, and meeting analysis. |
@@ -62,6 +63,10 @@ cd backend
 - `PORT`: FastAPI port, default `8080`.
 - `LOG_LEVEL`: backend logging level, default `INFO`.
 - `DEMO_MODE`: enables deterministic local demo providers when set to `1`, `true`, `yes`, or `on`.
+- `API_ACCESS_TOKEN`: optional self-hosted access token. When set, protected HTTP APIs require `Authorization: Bearer <token>` or `X-API-Token`; `/ws/meeting` requires `access_token=<token>`.
+- `CORS_ALLOW_ORIGINS`: comma-separated allowed browser origins. Defaults to `*` for local development; use explicit HTTPS origins in production.
+- `MAX_UPLOAD_BYTES`: maximum accepted upload size for meeting uploads and transcript utility endpoints.
+- `ALLOWED_UPLOAD_CONTENT_TYPES`: comma-separated accepted upload content types. Use `*` only for trusted local development.
 - `FFMPEG_BINARY`: ffmpeg executable used for non-demo uploads.
 - `AUDIO_SAMPLE_RATE`: PCM sample rate, default `16000`.
 - `AUDIO_CHANNELS`: audio channels, default `1`.
@@ -108,6 +113,7 @@ Backend Python commands must use the repository virtual environment:
 cd backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe tools\check_config.py
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 .\.venv\Scripts\python.exe tools\run_upload_worker.py --once
 ```
@@ -118,6 +124,7 @@ cd backend
 cd backend
 ./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ./.venv/Scripts/python.exe -m pytest
+./.venv/Scripts/python.exe tools/check_config.py
 ./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ./.venv/Scripts/python.exe tools/run_upload_worker.py --once
 ```

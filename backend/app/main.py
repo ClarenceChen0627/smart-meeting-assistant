@@ -23,6 +23,7 @@ from app.clients.volcengine_asr_client import VolcengineASRClient
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.middleware.observability import observability_middleware
+from app.middleware.security import api_token_auth_middleware, security_headers_middleware
 from app.services.audio_codec_service import AudioCodecService
 from app.services.audit_log_service import AuditLogService
 from app.services.asr_provider_service import ASRProviderService
@@ -188,12 +189,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.middleware("http")(security_headers_middleware)
+app.middleware("http")(api_token_auth_middleware)
 app.middleware("http")(observability_middleware)
 
 app.include_router(audit_router)

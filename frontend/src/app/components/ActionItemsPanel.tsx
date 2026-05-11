@@ -1,6 +1,7 @@
-import { Calendar, CheckCircle2, Circle, Clock, User } from 'lucide-react';
+import { Calendar, CheckCircle2, Circle, Clock, Download, User } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { ActionItem as SummaryActionItem, ActionItemStatus, MeetingSummary, TranscriptItem } from '../../types';
+import { downloadActionItemsMarkdown } from '../meetingNotesExport';
 
 interface ActionItemViewModel extends SummaryActionItem {
   id: string;
@@ -12,6 +13,9 @@ interface ActionItemViewModel extends SummaryActionItem {
 interface ActionItemsPanelProps {
   summary: MeetingSummary | null;
   transcripts?: TranscriptItem[];
+  meetingDate?: string | null;
+  meetingId?: string | null;
+  meetingTitle?: string | null;
   readOnly?: boolean;
   onStatusChange?: (actionItemIndex: number, status: ActionItemStatus) => Promise<void> | void;
   onStatusChangeError?: (message: string) => void;
@@ -58,6 +62,9 @@ const formatTimestamp = (item: SummaryActionItem, transcripts: TranscriptItem[])
 export function ActionItemsPanel({
   summary,
   transcripts = [],
+  meetingDate,
+  meetingId,
+  meetingTitle,
   readOnly = false,
   onStatusChange,
   onStatusChangeError,
@@ -124,6 +131,25 @@ export function ActionItemsPanel({
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            downloadActionItemsMarkdown({
+              summary,
+              transcripts,
+              meetingDate,
+              meetingId,
+              meetingTitle,
+            });
+          }}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Download className="h-4 w-4" />
+          <span>Export Actions</span>
+        </button>
+      </div>
+
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <p className="text-sm text-gray-500 mb-1">Total Action Items</p>

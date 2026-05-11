@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -47,6 +47,11 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_list(name: str, default: str = "") -> list[str]:
+    value = os.getenv(name, default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = os.getenv("HOST", "0.0.0.0")
@@ -55,6 +60,15 @@ class Settings:
     service_name: str = "Smart Meeting Assistant Backend"
     service_version: str = "2.0.0"
     demo_mode: bool = _env_flag("DEMO_MODE", False)
+    api_access_token: str = os.getenv("API_ACCESS_TOKEN", "").strip()
+    cors_allow_origins: list[str] = field(default_factory=lambda: _env_list("CORS_ALLOW_ORIGINS", "*"))
+    max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(500 * 1024 * 1024)))
+    allowed_upload_content_types: list[str] = field(
+        default_factory=lambda: _env_list(
+            "ALLOWED_UPLOAD_CONTENT_TYPES",
+            "audio/wav,audio/x-wav,audio/mpeg,audio/mp3,audio/mp4,audio/webm,audio/ogg,video/webm,application/octet-stream",
+        )
+    )
 
     ffmpeg_binary: str = os.getenv("FFMPEG_BINARY", "ffmpeg")
     sample_rate: int = int(os.getenv("AUDIO_SAMPLE_RATE", "16000"))

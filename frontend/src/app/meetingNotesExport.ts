@@ -6,7 +6,10 @@ export interface MeetingNotesExportInput {
   meetingDate?: string | null;
   meetingId?: string | null;
   meetingTitle?: string | null;
+  template?: MeetingNotesTemplate;
 }
+
+export type MeetingNotesTemplate = 'standard' | 'chinese_minutes';
 
 const sanitizeText = (value: string) => value.replace(/\r\n/g, '\n').trim();
 
@@ -72,9 +75,19 @@ export const buildMeetingNotesMarkdown = ({
   transcripts = [],
   meetingDate,
   meetingTitle,
+  template = 'standard',
 }: MeetingNotesExportInput) => {
   const title = sanitizeText(meetingTitle ?? '') || sanitizeText(summary.title) || 'Meeting Notes';
   const actionItems = summary.action_items.filter((item) => item.is_actionable);
+  if (template === 'chinese_minutes') {
+    return buildChineseMinutesMarkdown({
+      title,
+      summary,
+      transcripts,
+      meetingDate,
+      actionItems,
+    });
+  }
   const lines: string[] = [
     `# ${title}`,
     '',
@@ -114,10 +127,95 @@ export const buildMeetingNotesMarkdown = ({
   return `${lines.join('\n')}\n`;
 };
 
+const buildChineseMinutesMarkdown = ({
+  title,
+  summary,
+  transcripts,
+  meetingDate,
+  actionItems,
+}: {
+  title: string;
+  summary: MeetingSummary;
+  transcripts: TranscriptItem[];
+  meetingDate?: string | null;
+  actionItems: ActionItem[];
+}) => {
+  const lines: string[] = [
+    `# ${title}`,
+    '',
+    `- 会议日期: ${formatDate(meetingDate)}`,
+    `- 会议时长: ${formatDuration(transcripts)}`,
+    '',
+    '## 会议概览',
+    '',
+    sanitizeText(summary.overview) || '暂无会议概览。',
+    '',
+    '## 关键议题',
+    '',
+  ];
+
+  appendList(lines, summary.key_topics, '暂无关键议题。');
+  lines.push('', '## 决议', '');
+  appendList(lines, summary.decisions, '暂无明确决议。');
+  lines.push('', '## 风险与待确认事项', '');
+  appendList(lines, summary.risks, '暂无风险或待确认事项。');
+  lines.push('', '## 后续行动', '');
+
+  if (!actionItems.length) {
+    lines.push('- 暂无后续行动。');
+  } else {
+    actionItems.forEach((item) => {
+      const details = [
+        `负责人: ${sanitizeText(item.assignee) || '未分配'}`,
+        `截止时间: ${sanitizeText(item.deadline) || '未指定'}`,
+        `状态: ${item.status}`,
+        `来源: ${formatTranscriptReference(item, transcripts)}`,
+        `置信度: ${Math.round(item.confidence * 100)}%`,
+      ];
+      lines.push(`- ${sanitizeText(item.task)} (${details.join('; ')})`);
+    });
+  }
+
+  return `${lines.join('\n')}\n`;
+};
+
+export const buildActionItemsMarkdown = ({
+  summary,
+  transcripts = [],
+  meetingDate,
+  meetingTitle,
+}: MeetingNotesExportInput) => {
+  const title = sanitizeText(meetingTitle ?? '') || sanitizeText(summary.title) || 'Meeting Action Items';
+  const actionItems = summary.action_items.filter((item) => item.is_actionable);
+  const lines = [
+    `# ${title} - Action Items`,
+    '',
+    `- Date: ${formatDate(meetingDate)}`,
+    '',
+    '| Task | Owner | Deadline | Status | Source | Confidence |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+
+  if (!actionItems.length) {
+    lines.push('| No follow-up actions extracted. |  |  |  |  |  |');
+  } else {
+    actionItems.forEach((item) => {
+      lines.push(
+        `| ${escapeTableCell(item.task)} | ${escapeTableCell(item.assignee || 'Unassigned')} | ${escapeTableCell(item.deadline || 'Not specified')} | ${item.status} | ${formatTranscriptReference(item, transcripts)} | ${Math.round(item.confidence * 100)}% |`
+      );
+    });
+  }
+
+  return `${lines.join('\n')}\n`;
+};
+
+const escapeTableCell = (value: string) => sanitizeText(value).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+
 export const buildMeetingNotesFilename = (
   summary: MeetingSummary,
   meetingId?: string | null,
-  meetingTitle?: string | null
+  meetingTitle?: string | null,
+  suffix = ''
 ) => {
   const baseName = sanitizeText(meetingTitle ?? '') || sanitizeText(summary.title) || meetingId || 'meeting-notes';
   const safeName = baseName
@@ -127,7 +225,13 @@ export const buildMeetingNotesFilename = (
     .replace(/^-|-$/g, '')
     .toLowerCase();
 
-  return `${safeName || 'meeting-notes'}.md`;
+  const normalizedSuffix = suffix
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase();
+  return `${safeName || 'meeting-notes'}${normalizedSuffix ? `-${normalizedSuffix}` : ''}.md`;
 };
 
 export const downloadMeetingNotesMarkdown = (input: MeetingNotesExportInput) => {
@@ -137,6 +241,19 @@ export const downloadMeetingNotesMarkdown = (input: MeetingNotesExportInput) => 
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = buildMeetingNotesFilename(input.summary, input.meetingId, input.meetingTitle);
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+};
+
+export const downloadActionItemsMarkdown = (input: MeetingNotesExportInput) => {
+  const markdown = buildActionItemsMarkdown(input);
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = buildMeetingNotesFilename(input.summary, input.meetingId, input.meetingTitle, 'action-items');
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

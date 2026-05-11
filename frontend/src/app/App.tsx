@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, History, Mic, MicOff, Pause, Play, RotateCcw } from 'lucide-react';
+import { AlertCircle, History, KeyRound, Mic, MicOff, Pause, Play, RotateCcw } from 'lucide-react';
 
 import { ActionItemsPanel } from './components/ActionItemsPanel';
 import { ASRProviderControls } from './components/ASRProviderControls';
@@ -12,7 +12,7 @@ import { SummaryPanel } from './components/SummaryPanel';
 import { TranscriptPanel } from './components/TranscriptPanel';
 import { TranslationControls } from './components/TranslationControls';
 import { UploadMeetingControls } from './components/UploadMeetingControls';
-import { buildApiBaseUrl, buildWebSocketUrl } from './runtimeConfig';
+import { apiFetch, buildApiBaseUrl, buildWebSocketUrl, getApiAccessToken, setApiAccessToken } from './runtimeConfig';
 import { buildUploadStatusMessage, processingStageLabels } from './uploadStatus';
 import { useAudioRecording } from '../hooks/useAudioRecording';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -111,6 +111,9 @@ const toHistoryListItem = (meeting: MeetingRecord): MeetingHistoryListItem => ({
   raw_audio_filename: meeting.raw_audio_filename,
   raw_audio_content_type: meeting.raw_audio_content_type,
   raw_audio_size_bytes: meeting.raw_audio_size_bytes,
+  favorite: meeting.favorite,
+  archived: meeting.archived,
+  tags: meeting.tags,
 });
 
 const mergeMeetingIntoHistoryList = (
@@ -154,6 +157,7 @@ export default function App() {
   const [globalGlossaryTerms, setGlobalGlossaryTerms] = useState<GlossaryTermRecord[]>([]);
   const [isGlossaryLoading, setIsGlossaryLoading] = useState(false);
   const [glossaryError, setGlossaryError] = useState('');
+  const [apiAccessToken, setApiAccessTokenState] = useState(() => getApiAccessToken());
 
   const [transcripts, setTranscripts] = useState<DisplayTranscriptItem[]>([]);
   const [analysis, setAnalysis] = useState<MeetingAnalysis | null>(null);
@@ -191,7 +195,7 @@ export default function App() {
   const loadHistoryList = async () => {
     try {
       setIsHistoryLoading(true);
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings`);
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings`);
       if (!response.ok) {
         throw new Error(`Failed to load meeting history (${response.status})`);
       }
@@ -204,11 +208,21 @@ export default function App() {
     }
   };
 
+  const handleConfigureAccessToken = () => {
+    const nextToken = window.prompt('API access token', apiAccessToken);
+    if (nextToken === null) {
+      return;
+    }
+    setApiAccessToken(nextToken);
+    setApiAccessTokenState(nextToken.trim());
+    setServerError('');
+  };
+
   const loadGlobalGlossaryTerms = async () => {
     try {
       setIsGlossaryLoading(true);
       setGlossaryError('');
-      const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms`);
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/glossary/terms`);
       if (!response.ok) {
         throw new Error(`Failed to load glossary terms (${response.status})`);
       }
@@ -223,7 +237,7 @@ export default function App() {
 
   const handleCreateGlobalGlossaryTerm = async (term: GlossaryTermCreate) => {
     setGlossaryError('');
-    const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms`, {
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/glossary/terms`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -250,7 +264,7 @@ export default function App() {
 
   const handleUpdateGlobalGlossaryTerm = async (termId: string, term: GlossaryTermUpdate) => {
     setGlossaryError('');
-    const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms/${termId}`, {
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/glossary/terms/${termId}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -281,7 +295,7 @@ export default function App() {
 
   const handleDeleteGlobalGlossaryTerm = async (termId: string) => {
     setGlossaryError('');
-    const response = await fetch(`${buildApiBaseUrl()}/api/glossary/terms/${termId}`, {
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/glossary/terms/${termId}`, {
       method: 'DELETE',
     });
 
@@ -302,7 +316,7 @@ export default function App() {
   };
 
   const refreshMeetingDetail = async (meetingId: string) => {
-    const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`);
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`);
     if (!response.ok) {
       throw new Error(`Failed to load meeting record (${response.status})`);
     }
@@ -318,7 +332,7 @@ export default function App() {
     try {
       setIsAuditLoading(true);
       setAuditError('');
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/audit-events`);
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/audit-events`);
       if (!response.ok) {
         throw new Error(`Failed to load audit history (${response.status})`);
       }
@@ -580,7 +594,7 @@ export default function App() {
         formData.append('glossary_terms', glossaryTerms.trim());
       }
 
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/upload`, {
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -631,7 +645,7 @@ export default function App() {
     try {
       setDeletingMeetingId(meetingId);
       setServerError('');
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`, {
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}`, {
         method: 'DELETE',
       });
       if (!response.ok) {
@@ -671,7 +685,7 @@ export default function App() {
       return;
     }
 
-    const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/action-items/${actionItemIndex}`, {
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/action-items/${actionItemIndex}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -710,7 +724,7 @@ export default function App() {
   };
 
   const handleRenameMeeting = async (meetingId: string, title: string) => {
-    const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/title`, {
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/title`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -744,11 +758,48 @@ export default function App() {
     }
   };
 
+  const handleUpdateMeetingMetadata = async (
+    meetingId: string,
+    metadata: { favorite?: boolean; archived?: boolean; tags?: string[] }
+  ) => {
+    const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/metadata`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(metadata),
+    });
+
+    if (!response.ok) {
+      let detail = `Failed to update meeting metadata (${response.status})`;
+      try {
+        const payload = await response.json() as { detail?: string };
+        if (payload.detail) {
+          detail = payload.detail;
+        }
+      } catch {
+        // ignore response parse failures
+      }
+      throw new Error(detail);
+    }
+
+    const payload = await response.json() as MeetingRecord;
+    updateHistoryFromMeeting(payload);
+
+    if (historyMeeting?.meeting_id === payload.meeting_id) {
+      setHistoryMeeting(payload);
+    }
+
+    if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
+      setActiveUploadMeeting(payload);
+    }
+  };
+
   const handleSummarySave = async (meetingId: string, nextSummary: MeetingSummaryUpdate) => {
     try {
       setIsSavingSummary(true);
       setServerError('');
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/summary`, {
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/summary`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -797,7 +848,7 @@ export default function App() {
     try {
       setIsSavingSpeakers(true);
       setServerError('');
-      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/speakers`, {
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/speakers`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -964,6 +1015,19 @@ export default function App() {
               <span>History Meetings</span>
             </button>
 
+            <button
+              type="button"
+              onClick={handleConfigureAccessToken}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm ${
+                apiAccessToken
+                  ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>Access Token</span>
+            </button>
+
             <ASRProviderControls
               currentProvider={currentProvider}
               onProviderChange={setCurrentProvider}
@@ -1065,6 +1129,7 @@ export default function App() {
           void handleDeleteHistoryMeeting(meetingId);
         }}
         onRename={(meetingId, title) => handleRenameMeeting(meetingId, title)}
+        onMetadataUpdate={(meetingId, metadata) => handleUpdateMeetingMetadata(meetingId, metadata)}
         onRefresh={() => {
           void loadHistoryList();
         }}
@@ -1220,6 +1285,9 @@ export default function App() {
             <ActionItemsPanel
               summary={displayedSummary}
               transcripts={displayedTranscripts}
+              meetingDate={displayedMeetingDate}
+              meetingId={summaryMeetingId}
+              meetingTitle={displayedMeetingTitle}
               onStatusChange={handleActionItemStatusChange}
               onStatusChangeError={setServerError}
             />

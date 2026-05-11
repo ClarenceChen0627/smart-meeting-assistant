@@ -159,6 +159,7 @@ docker-compose up --build
 
 - [Architecture](docs/architecture.md)：系统总览、实时流程、上传流程和会议状态图。
 - [Configuration](docs/configuration.md)：demo 模式、provider 变量、前端覆盖配置和最小配置矩阵。
+- [Deployment](docs/zh/deployment.md)：HTTPS、反向代理、token 保护、Docker 和生产部署建议。
 - [质量评估](docs/zh/quality-evaluation.md)：使用私有音频 manifest、provider 对比、成本估算和复核报告，在本地评估真实上传会议质量。
 - [移动端浏览器测试](docs/zh/mobile-testing.md)：手机验收时的局域网、HTTPS、麦克风和 WebSocket 注意事项。
 - [API Reference](docs/api.md)：HTTP 接口、WebSocket 消息和 meeting record 字段。
@@ -166,6 +167,9 @@ docker-compose up --build
 - [diart Setup](docs/diart.md)：Windows 下实时 diart speaker update 的详细启动说明（[中文](docs/zh/diart.md)）。
 - [Requirements](docs/requirements/project-requirements.md)：原始项目需求和实现对比资料（[comparison](docs/requirements/requirements-comparison.md)，[中文](docs/zh/requirements/project-requirements.md)，[中文对比](docs/zh/requirements/requirements-comparison.md)）。
 - [Technical Implementation](docs/technical-implementation.md)：英文技术实现说明。
+- [Smoke Testing](docs/zh/smoke-testing.md)：demo 模式验收流程。
+- [Release Checklist](docs/zh/release-checklist.md)：发布前检查清单。
+- [Changelog](CHANGELOG.md)：重要的未发布和已发布变更记录。
 - [中文技术实现](docs/zh/technical-implementation.md)：中文技术实现说明。
 
 ## 演示截图
@@ -183,12 +187,15 @@ docker-compose up --build
 - 移动端后台和锁屏录音仍受操作系统与浏览器限制；前端会检测常见中断并提示用户。
 - Upload processing 使用 SQLite 持久队列，默认由内置 worker 消费；任务已有有限次数重试、backoff、stale recovery 和本地 diagnostics，外部监控与告警仍是后续工作。
 - 成功提交的人工编辑已有本地审计历史；账号 actor、保留策略和版本恢复仍属于后续治理工作。
+- 自部署 token 保护是基础私有部署防护，不是多用户账号或角色权限系统。
+- WebSocket token 鉴权使用 query 参数，因此生产反向代理应避免在访问日志中保留 query string。
+- 导出交付当前以 Markdown 为主；本版本不包含 Word / PDF 生成。
 
 ## Roadmap
 
-- 短期：真实会议上传质量评估包已建立，支持私有音频 manifest、本地 provider 运行、自动检查和人工复核报告。
-- 中期：真实会议准确率和可修正性能力已实现，包括持久化术语表、speaker 重命名 / 合并、移动端录音稳定性和会中滚动摘要。
-- 长期：面向生产使用的质量治理和运行可靠性能力已实现，包括 provider 质量 / 成本评估、SQLite 持久上传队列、任务恢复、本地可观测性和编辑审计历史。
+- 质量优先 Roadmap：已完成。真实会议上传质量评估、术语表纠错、speaker 编辑、移动端稳定性、会中滚动摘要、provider 质量 / 成本评估、持久上传队列、任务恢复、本地可观测性和编辑审计历史都已实现。
+- 上线可用性 Roadmap：已在当前 feature 分支完成。部署与配置文档、配置自检、可选 token 保护、上传限制、会议资产管理、Markdown 交付导出和发布准备文档都已实现。
+- 下一阶段候选方向：多用户账号与角色、团队会议 / 术语表 / provider 配置、外部监控与告警、保留策略和版本恢复治理，以及可选 Word / PDF 导出。
 
 ## License
 

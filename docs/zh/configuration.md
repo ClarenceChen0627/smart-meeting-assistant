@@ -23,6 +23,7 @@ cp .env.example .env
 | Demo mode | `DEMO_MODE=1` | 不需要外部 AI key。用于本地 smoke test 和 CI。 |
 | Browser frontend | 后端不是 `localhost:8080` 时配置 `VITE_API_BASE_URL`、`VITE_WS_BASE_URL` | 放在 `frontend/.env.local`。 |
 | Local backend | `PORT`、`LOG_LEVEL`、`MEETING_HISTORY_DB_PATH` | 默认值足够启动后端。 |
+| Private self-hosting | `API_ACCESS_TOKEN`、`CORS_ALLOW_ORIGINS`、`MAX_UPLOAD_BYTES` | 只有本地开发时才建议把 token 留空。生产环境应使用 HTTPS。 |
 | Realtime Volcengine ASR | `DEFAULT_ASR_PROVIDER=volcengine`、`VOLCENGINE_ASR_APP_KEY`、`VOLCENGINE_ASR_ACCESS_KEY`、`VOLCENGINE_ASR_RESOURCE_ID` | Volcengine 可返回原生 speaker clustering。 |
 | Realtime DashScope ASR | `DEFAULT_ASR_PROVIDER=dashscope`、`DASHSCOPE_API_KEY`、`DASHSCOPE_ASR_MODEL` | DashScope Paraformer 实时 ASR 所需。 |
 | Translation, summary, analysis | `DASHSCOPE_API_KEY`、`DASHSCOPE_MODEL`、`DASHSCOPE_TRANSLATION_MODEL` | 翻译、总结和会议分析使用。 |
@@ -62,6 +63,10 @@ cd backend
 - `PORT`: FastAPI 端口，默认 `8080`。
 - `LOG_LEVEL`: 后端日志等级，默认 `INFO`。
 - `DEMO_MODE`: 设置为 `1`、`true`、`yes` 或 `on` 时启用本地 demo provider。
+- `API_ACCESS_TOKEN`: 可选自部署访问 token。设置后，受保护 HTTP API 需要 `Authorization: Bearer <token>` 或 `X-API-Token`；`/ws/meeting` 需要 `access_token=<token>`。
+- `CORS_ALLOW_ORIGINS`: 逗号分隔的浏览器允许来源。默认 `*` 方便本地开发；生产环境应改成明确的 HTTPS origin。
+- `MAX_UPLOAD_BYTES`: 会议上传和转写工具接口接受的最大上传字节数。
+- `ALLOWED_UPLOAD_CONTENT_TYPES`: 逗号分隔的允许上传 content type。只在可信本地开发时才建议使用 `*`。
 - `FFMPEG_BINARY`: 非 demo 上传时使用的 ffmpeg 可执行文件。
 - `AUDIO_SAMPLE_RATE`: PCM 采样率，默认 `16000`。
 - `AUDIO_CHANNELS`: 音频声道数，默认 `1`。
@@ -108,6 +113,7 @@ VITE_WS_BASE_URL=ws://localhost:8080
 cd backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe tools\check_config.py
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 .\.venv\Scripts\python.exe tools\run_upload_worker.py --once
 ```
@@ -118,6 +124,7 @@ cd backend
 cd backend
 ./.venv/Scripts/python.exe -m pip install -r requirements-dev.txt
 ./.venv/Scripts/python.exe -m pytest
+./.venv/Scripts/python.exe tools/check_config.py
 ./.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ./.venv/Scripts/python.exe tools/run_upload_worker.py --once
 ```

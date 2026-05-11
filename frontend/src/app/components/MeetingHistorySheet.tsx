@@ -1,4 +1,4 @@
-import { Check, CalendarDays, FileClock, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import { Archive, Check, CalendarDays, FileClock, Loader2, Pencil, Star, Tags, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 
 import type { MeetingHistoryListItem } from '../../types';
@@ -33,6 +33,10 @@ interface MeetingHistorySheetProps {
   onSelect: (meetingId: string) => void;
   onDelete: (meetingId: string) => void;
   onRename: (meetingId: string, title: string) => Promise<void> | void;
+  onMetadataUpdate: (
+    meetingId: string,
+    metadata: { favorite?: boolean; archived?: boolean; tags?: string[] }
+  ) => Promise<void> | void;
   onRefresh: () => void;
 }
 
@@ -86,12 +90,52 @@ export function MeetingHistorySheet({
   onSelect,
   onDelete,
   onRename,
+  onMetadataUpdate,
   onRefresh,
 }: MeetingHistorySheetProps) {
   const [editingMeetingId, setEditingMeetingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [renamingMeetingId, setRenamingMeetingId] = useState<string | null>(null);
+  const [updatingMetadataMeetingId, setUpdatingMetadataMeetingId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | MeetingHistoryListItem['status']>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | MeetingHistoryListItem['source_type']>('all');
+  const [favoriteFilter, setFavoriteFilter] = useState<'all' | 'favorite'>('all');
+  const [archivedFilter, setArchivedFilter] = useState<'active' | 'archived' | 'all'>('active');
+
+  const filteredMeetings = meetings.filter((meeting) => {
+    const query = searchTerm.trim().toLowerCase();
+    if (query) {
+      const searchable = [
+        buildMeetingTitle(meeting),
+        meeting.preview_text,
+        meeting.source_name ?? '',
+        meeting.provider,
+        meeting.scene,
+        ...meeting.tags,
+      ].join(' ').toLowerCase();
+      if (!searchable.includes(query)) {
+        return false;
+      }
+    }
+    if (statusFilter !== 'all' && meeting.status !== statusFilter) {
+      return false;
+    }
+    if (sourceFilter !== 'all' && meeting.source_type !== sourceFilter) {
+      return false;
+    }
+    if (favoriteFilter === 'favorite' && !meeting.favorite) {
+      return false;
+    }
+    if (archivedFilter === 'active' && meeting.archived) {
+      return false;
+    }
+    if (archivedFilter === 'archived' && !meeting.archived) {
+      return false;
+    }
+    return true;
+  });
 
   const startRename = (meeting: MeetingHistoryListItem) => {
     setEditingMeetingId(meeting.meeting_id);
@@ -124,6 +168,30 @@ export function MeetingHistorySheet({
     }
   };
 
+  const updateMetadata = async (
+    meetingId: string,
+    metadata: { favorite?: boolean; archived?: boolean; tags?: string[] }
+  ) => {
+    try {
+      setUpdatingMetadataMeetingId(meetingId);
+      await onMetadataUpdate(meetingId, metadata);
+    } finally {
+      setUpdatingMetadataMeetingId(null);
+    }
+  };
+
+  const editTags = (meeting: MeetingHistoryListItem) => {
+    const value = window.prompt('Meeting tags, comma separated', meeting.tags.join(', '));
+    if (value === null) {
+      return;
+    }
+    const tags = value
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    void updateMetadata(meeting.meeting_id, { tags });
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-xl">
@@ -136,7 +204,7 @@ export function MeetingHistorySheet({
 
         <div className="flex items-center justify-between px-4 pt-4">
           <p className="text-sm text-gray-500">
-            {meetings.length} saved meeting{meetings.length === 1 ? '' : 's'}
+            {filteredMeetings.length} of {meetings.length} saved meeting{meetings.length === 1 ? '' : 's'}
           </p>
           <Button variant="outline" size="sm" onClick={onRefresh} disabled={isLoading}>
             Refresh
@@ -144,6 +212,54 @@ export function MeetingHistorySheet({
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <div className="sticky top-0 z-10 space-y-3 bg-white py-4">
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search meetings"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+                className="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-700"
+              >
+                <option value="all">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="processing">Processing</option>
+                <option value="failed">Failed</option>
+                <option value="finalized">Finalized</option>
+              </select>
+              <select
+                value={sourceFilter}
+                onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}
+                className="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-700"
+              >
+                <option value="all">All sources</option>
+                <option value="live">Live</option>
+                <option value="upload">Upload</option>
+              </select>
+              <select
+                value={favoriteFilter}
+                onChange={(event) => setFavoriteFilter(event.target.value as typeof favoriteFilter)}
+                className="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-700"
+              >
+                <option value="all">All favorites</option>
+                <option value="favorite">Favorites</option>
+              </select>
+              <select
+                value={archivedFilter}
+                onChange={(event) => setArchivedFilter(event.target.value as typeof archivedFilter)}
+                className="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-700"
+              >
+                <option value="active">Active</option>
+                <option value="archived">Archived</option>
+                <option value="all">All archive</option>
+              </select>
+            </div>
+          </div>
+
           {isLoading && (
             <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-gray-200 py-12 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -151,22 +267,23 @@ export function MeetingHistorySheet({
             </div>
           )}
 
-          {!isLoading && meetings.length === 0 && (
+          {!isLoading && filteredMeetings.length === 0 && (
             <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 py-12 text-center">
               <FileClock className="mb-3 h-10 w-10 text-gray-300" />
-              <p className="text-sm text-gray-600">No meeting history yet.</p>
+              <p className="text-sm text-gray-600">No meetings match this view.</p>
               <p className="mt-1 text-xs text-gray-500">Live and upload meetings will appear here as they are processed.</p>
             </div>
           )}
 
-          {!isLoading && meetings.length > 0 && (
+          {!isLoading && filteredMeetings.length > 0 && (
             <div className="space-y-3 pt-4">
-              {meetings.map((meeting) => {
+              {filteredMeetings.map((meeting) => {
                 const isSelected = selectedMeetingId === meeting.meeting_id;
                 const isOpening = loadingMeetingId === meeting.meeting_id;
                 const isDeleting = deletingMeetingId === meeting.meeting_id;
                 const isEditing = editingMeetingId === meeting.meeting_id;
                 const isRenaming = renamingMeetingId === meeting.meeting_id;
+                const isUpdatingMetadata = updatingMetadataMeetingId === meeting.meeting_id;
 
                 return (
                   <div
@@ -184,6 +301,16 @@ export function MeetingHistorySheet({
                           <span className={`rounded-full border px-2 py-0.5 text-xs uppercase ${sourceClasses[meeting.source_type]}`}>
                             {meeting.source_type}
                           </span>
+                          {meeting.favorite && (
+                            <span className="rounded-full border border-yellow-200 bg-yellow-50 px-2 py-0.5 text-xs text-yellow-700">
+                              favorite
+                            </span>
+                          )}
+                          {meeting.archived && (
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
+                              archived
+                            </span>
+                          )}
                           <span className="text-xs text-gray-500">{sceneLabels[meeting.scene] || meeting.scene}</span>
                           {meeting.target_lang && (
                             <span className="text-xs text-gray-400">Translate: {meeting.target_lang.toUpperCase()}</span>
@@ -261,6 +388,15 @@ export function MeetingHistorySheet({
                         {meeting.source_name && (
                           <p className="mt-2 text-xs text-gray-500">File: {meeting.source_name}</p>
                         )}
+                        {meeting.tags.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {meeting.tags.map((tag) => (
+                              <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         {meeting.error_message && (
                           <p className="mt-2 text-xs text-red-600">{meeting.error_message}</p>
                         )}
@@ -279,6 +415,45 @@ export function MeetingHistorySheet({
                           aria-label="Rename meeting record"
                         >
                           <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void updateMetadata(meeting.meeting_id, { favorite: !meeting.favorite });
+                          }}
+                          disabled={isDeleting || isUpdatingMetadata}
+                          className={`rounded-lg border p-2 transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                            meeting.favorite
+                              ? 'border-yellow-200 bg-yellow-50 text-yellow-600 hover:bg-yellow-100'
+                              : 'border-gray-200 text-gray-400 hover:border-yellow-200 hover:bg-yellow-50 hover:text-yellow-600'
+                          }`}
+                          aria-label={meeting.favorite ? 'Remove from favorites' : 'Add to favorites'}
+                        >
+                          <Star className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => editTags(meeting)}
+                          disabled={isDeleting || isUpdatingMetadata}
+                          className="rounded-lg border border-gray-200 p-2 text-gray-400 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-wait disabled:opacity-60"
+                          aria-label="Edit meeting tags"
+                        >
+                          <Tags className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void updateMetadata(meeting.meeting_id, { archived: !meeting.archived });
+                          }}
+                          disabled={isDeleting || isUpdatingMetadata}
+                          className={`rounded-lg border p-2 transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                            meeting.archived
+                              ? 'border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                              : 'border-gray-200 text-gray-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700'
+                          }`}
+                          aria-label={meeting.archived ? 'Restore meeting record' : 'Archive meeting record'}
+                        >
+                          {isUpdatingMetadata ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
                         </button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>

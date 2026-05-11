@@ -7,7 +7,7 @@ import type {
   MeetingSummaryUpdate,
   TranscriptItem,
 } from '../../types';
-import { downloadMeetingNotesMarkdown } from '../meetingNotesExport';
+import { downloadActionItemsMarkdown, downloadMeetingNotesMarkdown } from '../meetingNotesExport';
 
 interface SummaryPanelProps {
   summary: MeetingSummary | null;
@@ -424,8 +424,19 @@ export function SummaryPanel({
   const displayedTopics = summary.key_topics.length ? summary.key_topics : ['No key topics extracted.'];
   const displayedDecisions = summary.decisions.length ? summary.decisions : ['No decisions extracted.'];
   const displayedRisks = summary.risks.length ? summary.risks : [];
-  const exportNotes = () => {
+  const exportNotes = (template: 'standard' | 'chinese_minutes' = 'standard') => {
     downloadMeetingNotesMarkdown({
+      summary,
+      transcripts,
+      meetingDate,
+      meetingId,
+      meetingTitle,
+      template,
+    });
+  };
+
+  const exportActionItems = () => {
+    downloadActionItemsMarkdown({
       summary,
       transcripts,
       meetingDate,
@@ -443,14 +454,32 @@ export function SummaryPanel({
           </span>
         )}
         {!isProvisional && (
-          <button
-            type="button"
-            onClick={exportNotes}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
-          >
-            <Download className="h-4 w-4" />
-            <span>Export Notes</span>
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => exportNotes()}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              <Download className="h-4 w-4" />
+              <span>Export Notes</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => exportNotes('chinese_minutes')}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              <Download className="h-4 w-4" />
+              <span>Export Chinese</span>
+            </button>
+            <button
+              type="button"
+              onClick={exportActionItems}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              <Download className="h-4 w-4" />
+              <span>Export Actions</span>
+            </button>
+          </>
         )}
         {canEdit && (
           <button
