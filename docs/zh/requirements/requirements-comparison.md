@@ -118,7 +118,7 @@ Language:
 - live 会中 rolling summary 是临时结果，不写入会议历史；保存的最终 summary 仍在 finalize 或上传处理结束后生成。
 - 翻译当前是单目标语言，不支持一次会议同时输出多种目标语言。
 - 原始音频文件不进入会议历史持久化。
-- 上传处理使用 SQLite 持久队列，默认由内置 worker 消费；任务已有有限次数重试、backoff 和 stale recovery，更完整的可观测性仍是后续工作。
+- 上传处理使用 SQLite 持久队列，默认由内置 worker 消费；任务已有有限次数重试、backoff、stale recovery 和本地 diagnostics，外部监控与告警仍是后续工作。
 - Sentiment / engagement analysis 是会议级，不是参与者级。
 - ASR、summary、analysis 仍可能受模型识别错误、术语识别和中英混说影响。
 - Demo 模式只用于本地演示、开发和 CI smoke test，不代表真实模型质量。

@@ -6,8 +6,11 @@ import os
 import tempfile
 import time
 import wave
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter
+from typing import TypeVar
 from uuid import uuid4
 
 from fastapi import WebSocket
@@ -15,6 +18,7 @@ from starlette.websockets import WebSocketState
 
 from app.clients.asr_base import ASRClient, ASRStream
 from app.core.config import Settings
+from app.core.logging import correlation_context
 from app.schemas.glossary import GlossaryTerm
 from app.schemas.analysis import MeetingAnalysis
 from app.schemas.meeting_history import MeetingHistoryStatus, MeetingSourceType, SessionStarted
@@ -28,11 +32,13 @@ from app.services.glossary_service import GlossaryService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.realtime_diarization_service import RealtimeDiarizationService, RealtimeDiarizationSession
 from app.services.meeting_analysis_service import MeetingAnalysisService
+from app.services.observability_service import ObservabilityService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 ROLLING_SUMMARY_MIN_FINAL_TRANSCRIPTS = 3
 ROLLING_SUMMARY_TRANSCRIPT_INTERVAL = 3
 ROLLING_SUMMARY_MIN_SECONDS = 60.0
@@ -97,6 +103,7 @@ class SessionManager:
         translation_service: TranslationService,
         meeting_history_service: MeetingHistoryService,
         glossary_service: GlossaryService,
+        observability_service: ObservabilityService | None = None,
     ) -> None:
         self._settings = settings
         self._asr_provider_service = asr_provider_service
@@ -109,6 +116,7 @@ class SessionManager:
         self._translation_service = translation_service
         self._meeting_history_service = meeting_history_service
         self._glossary_service = glossary_service
+        self._observability_service = observability_service
         self._monotonic = time.monotonic
         self._sessions: dict[str, MeetingSession] = {}
 
@@ -297,38 +305,59 @@ class SessionManager:
             raise
 
     async def _start_asr_stream(self, session: MeetingSession) -> None:
-        try:
-            session.asr_stream = session.asr_client.create_pcm_stream(
-                on_segment=lambda segment: self._handle_segment(session, segment),
-                on_error=lambda message: self._handle_asr_error(session, message),
-            )
-            await session.asr_stream.start()
-        except RuntimeError as exc:
-            fallback = self._asr_provider_service.resolve_fallback(session.active_provider)
-            if fallback is None:
-                logger.exception("Starting ASR stream failed for %s via %s", session.session_id, session.active_provider)
-                await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
-                return
-            logger.warning(
-                "Starting ASR stream failed for %s via %s. Retrying with %s.",
-                session.session_id,
-                session.active_provider,
-                fallback.provider_name,
-            )
-            self._apply_asr_selection(session, fallback)
+        with correlation_context(meeting_id=session.session_id, provider=session.active_provider):
+            started_at = perf_counter()
             try:
                 session.asr_stream = session.asr_client.create_pcm_stream(
                     on_segment=lambda segment: self._handle_segment(session, segment),
                     on_error=lambda message: self._handle_asr_error(session, message),
                 )
                 await session.asr_stream.start()
-            except RuntimeError as fallback_exc:
-                logger.exception(
-                    "Starting fallback ASR stream failed for %s via %s",
-                    session.session_id,
-                    session.active_provider,
+                self._record_provider_operation(
+                    operation="live_asr_start",
+                    provider=session.active_provider,
+                    latency_seconds=perf_counter() - started_at,
+                    success=True,
                 )
-                await self._handle_asr_error(session, str(fallback_exc).strip() or fallback_exc.__class__.__name__)
+            except RuntimeError as exc:
+                self._record_provider_operation(
+                    operation="live_asr_start",
+                    provider=session.active_provider,
+                    latency_seconds=perf_counter() - started_at,
+                    success=False,
+                )
+                fallback = self._asr_provider_service.resolve_fallback(session.active_provider)
+                if fallback is None:
+                    logger.exception("Starting ASR stream failed.")
+                    await self._handle_asr_error(session, str(exc).strip() or exc.__class__.__name__)
+                    return
+                logger.warning(
+                    "Starting ASR stream failed. Retrying with %s.",
+                    fallback.provider_name,
+                )
+                self._apply_asr_selection(session, fallback)
+                fallback_started_at = perf_counter()
+                try:
+                    session.asr_stream = session.asr_client.create_pcm_stream(
+                        on_segment=lambda segment: self._handle_segment(session, segment),
+                        on_error=lambda message: self._handle_asr_error(session, message),
+                    )
+                    await session.asr_stream.start()
+                    self._record_provider_operation(
+                        operation="live_asr_fallback",
+                        provider=session.active_provider,
+                        latency_seconds=perf_counter() - fallback_started_at,
+                        success=True,
+                    )
+                except RuntimeError as fallback_exc:
+                    self._record_provider_operation(
+                        operation="live_asr_fallback",
+                        provider=session.active_provider,
+                        latency_seconds=perf_counter() - fallback_started_at,
+                        success=False,
+                    )
+                    logger.exception("Starting fallback ASR stream failed.")
+                    await self._handle_asr_error(session, str(fallback_exc).strip() or fallback_exc.__class__.__name__)
 
     def _start_realtime_diarization(self, session: MeetingSession) -> None:
         if not session.should_run_realtime_diarization:
@@ -431,9 +460,13 @@ class SessionManager:
                 continue
 
             try:
-                translated_text = await self._translation_service.translate_text(
-                    text=text,
-                    target_lang=session.target_lang,
+                translated_text = await self._recorded_operation(
+                    operation_name="live_translation",
+                    provider="dashscope",
+                    call=lambda: self._translation_service.translate_text(
+                        text=text,
+                        target_lang=session.target_lang,
+                    ),
                 )
             except (RuntimeError, ValueError) as exc:
                 logger.warning(
@@ -595,10 +628,14 @@ class SessionManager:
             return
         if not self._summary_service.is_configured:
             await self._send_error(session, "DashScope is not configured; summary is empty.")
-        summary = await self._summary_service.generate_summary(
-            session.transcripts,
-            session.scene,
-            glossary_terms=session.glossary_terms,
+        summary = await self._recorded_operation(
+            operation_name="live_summary",
+            provider="dashscope",
+            call=lambda: self._summary_service.generate_summary(
+                session.transcripts,
+                session.scene,
+                glossary_terms=session.glossary_terms,
+            ),
         )
         self._meeting_history_service.update_summary(session.session_id, summary)
         await self._send_message(
@@ -622,10 +659,14 @@ class SessionManager:
         session.rolling_summary_in_progress = True
         session.last_rolling_summary_requested_at = self._monotonic()
         try:
-            summary = await self._summary_service.generate_summary(
-                final_transcripts,
-                session.scene,
-                glossary_terms=session.glossary_terms,
+            summary = await self._recorded_operation(
+                operation_name="live_rolling_summary",
+                provider="dashscope",
+                call=lambda: self._summary_service.generate_summary(
+                    final_transcripts,
+                    session.scene,
+                    glossary_terms=session.glossary_terms,
+                ),
             )
             if session.finalizing:
                 return
@@ -649,10 +690,14 @@ class SessionManager:
             return
         session.analysis_in_progress = True
         try:
-            analysis = await self._meeting_analysis_service.analyze_meeting(
-                session.transcripts,
-                session.scene,
-                glossary_terms=session.glossary_terms,
+            analysis = await self._recorded_operation(
+                operation_name="live_analysis",
+                provider="dashscope",
+                call=lambda: self._meeting_analysis_service.analyze_meeting(
+                    session.transcripts,
+                    session.scene,
+                    glossary_terms=session.glossary_terms,
+                ),
             )
             session.latest_analysis = analysis
             self._meeting_history_service.update_analysis(session.session_id, analysis)
@@ -724,6 +769,49 @@ class SessionManager:
     @staticmethod
     def _final_transcripts(session: MeetingSession) -> list[TranscriptItem]:
         return [transcript for transcript in session.transcripts if transcript.transcript_is_final]
+
+    async def _recorded_operation(
+        self,
+        *,
+        operation_name: str,
+        provider: str,
+        call: Callable[[], Awaitable[T]],
+    ) -> T:
+        started_at = perf_counter()
+        try:
+            result = await call()
+        except Exception:
+            self._record_provider_operation(
+                operation=operation_name,
+                provider=provider,
+                latency_seconds=perf_counter() - started_at,
+                success=False,
+            )
+            raise
+        self._record_provider_operation(
+            operation=operation_name,
+            provider=provider,
+            latency_seconds=perf_counter() - started_at,
+            success=True,
+        )
+        return result
+
+    def _record_provider_operation(
+        self,
+        *,
+        operation: str,
+        provider: str,
+        latency_seconds: float,
+        success: bool,
+    ) -> None:
+        if self._observability_service is None:
+            return
+        self._observability_service.record_provider_operation(
+            operation=operation,
+            provider=provider,
+            latency_seconds=latency_seconds,
+            success=success,
+        )
 
     async def _postprocess_final_transcript(
         self,

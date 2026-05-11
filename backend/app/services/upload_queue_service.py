@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.logging import correlation_context
 from app.schemas.glossary import GlossaryTerm
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,15 @@ def _utc_now_iso() -> str:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_utc_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 class UploadJobStatus:
@@ -230,6 +240,82 @@ class UploadQueueStore:
         return {
             row["meeting_id"]: row["error_message"] or row["last_error"] or "Upload processing failed."
             for row in rows
+        }
+
+    def diagnostics_snapshot(self, *, processing_timeout_seconds: float) -> dict:
+        timestamp = _utc_now_iso()
+        stale_cutoff = (_utc_now() - timedelta(seconds=max(0.0, processing_timeout_seconds))).isoformat().replace("+00:00", "Z")
+        with self._connect() as connection:
+            status_rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM upload_jobs
+                GROUP BY status
+                """
+            ).fetchall()
+            eligible_queued = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM upload_jobs
+                WHERE status = ?
+                  AND (next_run_at IS NULL OR next_run_at <= ?)
+                """,
+                (UploadJobStatus.QUEUED, timestamp),
+            ).fetchone()["count"]
+            delayed_retry = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM upload_jobs
+                WHERE status = ?
+                  AND next_run_at IS NOT NULL
+                  AND next_run_at > ?
+                """,
+                (UploadJobStatus.QUEUED, timestamp),
+            ).fetchone()["count"]
+            processing_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM upload_jobs WHERE status = ?",
+                (UploadJobStatus.PROCESSING,),
+            ).fetchone()["count"]
+            stale_processing = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM upload_jobs
+                WHERE status = ?
+                  AND (claimed_at IS NULL OR claimed_at <= ?)
+                """,
+                (UploadJobStatus.PROCESSING, stale_cutoff),
+            ).fetchone()["count"]
+            oldest_queued_row = connection.execute(
+                """
+                SELECT created_at
+                FROM upload_jobs
+                WHERE status = ?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (UploadJobStatus.QUEUED,),
+            ).fetchone()
+            last_error_count = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM upload_jobs
+                WHERE last_error IS NOT NULL AND TRIM(last_error) != ''
+                """
+            ).fetchone()["count"]
+
+        oldest_queued_age_seconds = None
+        if oldest_queued_row is not None:
+            created_at = _parse_utc_iso(oldest_queued_row["created_at"])
+            if created_at is not None:
+                oldest_queued_age_seconds = round(max(0.0, (_utc_now() - created_at).total_seconds()), 3)
+        return {
+            "byStatus": {row["status"]: row["count"] for row in status_rows},
+            "eligibleQueued": eligible_queued,
+            "delayedRetry": delayed_retry,
+            "processing": processing_count,
+            "staleProcessing": stale_processing,
+            "oldestQueuedAgeSeconds": oldest_queued_age_seconds,
+            "lastErrorCount": last_error_count,
         }
 
     def fail_jobs_with_missing_payloads(self) -> dict[str, str]:
@@ -582,33 +668,40 @@ class UploadQueueWorker:
             if job is None:
                 await asyncio.sleep(self._poll_interval_seconds)
                 continue
-            logger.info("Upload queue worker %s/%s claimed job %s.", self._name, worker_index, job.meeting_id)
+            with correlation_context(meeting_id=job.meeting_id, job_id=job.meeting_id, provider=job.provider):
+                logger.info("Upload queue worker %s/%s claimed job.", self._name, worker_index)
             await self._process_job(job)
 
     async def _process_job(self, job: UploadJob) -> None:
-        if not job.payload_path.exists():
-            error_message = UploadQueueStore.MISSING_PAYLOAD_ERROR
-            self._store.mark_failed(job.meeting_id, error_message)
-            await self._notify_terminal_failure(job, error_message)
-            self._store.cleanup_payload(job)
-            return
-
-        try:
-            error_message = await self._handler(job)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception("Upload queue worker %s failed while running job %s.", self._name, job.meeting_id)
-            error_message = str(exc).strip() or exc.__class__.__name__
-
-        if error_message:
-            terminal = self._store.mark_attempt_failed(job, error_message)
-            if terminal:
+        with correlation_context(meeting_id=job.meeting_id, job_id=job.meeting_id, provider=job.provider):
+            if not job.payload_path.exists():
+                error_message = UploadQueueStore.MISSING_PAYLOAD_ERROR
+                logger.error("Upload queue payload is missing.")
+                self._store.mark_failed(job.meeting_id, error_message)
                 await self._notify_terminal_failure(job, error_message)
                 self._store.cleanup_payload(job)
-        else:
-            self._store.mark_completed(job.meeting_id)
-            self._store.cleanup_payload(job)
+                return
+
+            try:
+                error_message = await self._handler(job)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("Upload queue worker %s failed while running job.", self._name)
+                error_message = str(exc).strip() or exc.__class__.__name__
+
+            if error_message:
+                terminal = self._store.mark_attempt_failed(job, error_message)
+                if terminal:
+                    logger.error("Upload queue job exhausted retry attempts: %s", error_message)
+                    await self._notify_terminal_failure(job, error_message)
+                    self._store.cleanup_payload(job)
+                else:
+                    logger.warning("Upload queue job will retry after attempt failure: %s", error_message)
+            else:
+                self._store.mark_completed(job.meeting_id)
+                logger.info("Upload queue job completed.")
+                self._store.cleanup_payload(job)
 
     async def _notify_terminal_failure(self, job: UploadJob, error_message: str) -> None:
         if self._on_terminal_failure is None:

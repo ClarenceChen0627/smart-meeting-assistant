@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.meetings import router as meetings_router
 from app.api.transcribe import router as transcribe_router
@@ -27,6 +28,7 @@ from app.services.glossary_service import GlossaryService
 from app.services.glossary_store_service import GlossaryStoreService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.meeting_analysis_service import MeetingAnalysisService
+from app.services.observability_service import ObservabilityService
 from app.services.raw_audio_retention_service import RawAudioRetentionService
 from app.services.session_manager import SessionManager
 from app.services.speaker_service import SpeakerService
@@ -34,6 +36,7 @@ from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
 from app.services.upload_meeting_service import UploadMeetingService
 from app.services.upload_queue_service import UploadJobStatus, UploadQueueStore, UploadQueueWorker
+from app.middleware.observability import observability_middleware
 
 
 class StubAudioCodecService:
@@ -73,6 +76,11 @@ class StubASRClient:
 
     def create_pcm_stream(self, *, on_segment, on_error):
         return StubASRStream(self._segments, on_segment)
+
+
+class FailingStartASRClient(StubASRClient):
+    def create_pcm_stream(self, *, on_segment, on_error):
+        raise RuntimeError("ASR stream start failed in test")
 
 
 class StubASRStream:
@@ -343,6 +351,7 @@ def build_session_manager(
     translation_service=None,
     realtime_diarization_service=None,
     glossary_store_service=None,
+    observability_service=None,
 ) -> tuple[Settings, SessionManager]:
     settings = build_settings(
         tmp_path,
@@ -365,6 +374,7 @@ def build_session_manager(
         translation_service=translation_service or StubTranslationService(),
         meeting_history_service=MeetingHistoryService(settings.resolved_meeting_history_db_path),
         glossary_service=GlossaryService(settings, glossary_store_service),
+        observability_service=observability_service,
     )
 
 
@@ -387,6 +397,7 @@ def build_upload_service(
     upload_queue_retry_base_seconds: float = 0,
     upload_queue_retry_max_seconds: float = 0,
     upload_queue_processing_timeout_seconds: float = 1800,
+    observability_service=None,
 ) -> tuple[Settings, MeetingHistoryService, UploadMeetingService]:
     settings = build_settings(
         tmp_path,
@@ -423,6 +434,7 @@ def build_upload_service(
         upload_queue_store=upload_queue_store,
         embedded_worker_enabled=embedded_worker_enabled,
         upload_queue_processing_timeout_seconds=settings.upload_queue_processing_timeout_seconds,
+        observability_service=observability_service,
     )
 
 
@@ -453,6 +465,83 @@ def wait_for_meeting_status(
             return latest_payload
         time.sleep(delay_seconds)
     raise AssertionError(f"Timed out waiting for meeting {meeting_id} to reach {expected_status!r}: {latest_payload}")
+
+
+class StubProviderStatusService:
+    def provider_statuses(self):
+        return [{"provider": "demo", "configured": True}]
+
+
+def test_observability_middleware_generates_and_reuses_request_id(tmp_path) -> None:
+    app = FastAPI()
+    app.middleware("http")(observability_middleware)
+    app.state.observability_service = ObservabilityService()
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        generated_response = client.get("/ping")
+        supplied_response = client.get("/ping", headers={"X-Request-ID": "manual-request-id"})
+
+    assert generated_response.status_code == 200
+    assert generated_response.headers["X-Request-ID"]
+    assert supplied_response.headers["X-Request-ID"] == "manual-request-id"
+    snapshot = app.state.observability_service.snapshot(
+        service_name="test",
+        service_version="0",
+        demo_mode=True,
+        provider_statuses=[],
+        upload_queue={},
+    )
+    assert snapshot["requests"]["total"] == 2
+    assert snapshot["requests"]["byStatus"]["200"] == 2
+
+
+def test_diagnostics_returns_runtime_counters_and_queue_summary_without_paths(tmp_path) -> None:
+    settings = build_settings(tmp_path, demo_mode=True)
+    observability_service = ObservabilityService()
+    observability_service.record_provider_operation(
+        operation="upload_asr",
+        provider="demo",
+        latency_seconds=0.25,
+        success=True,
+    )
+    upload_queue_store = UploadQueueStore(
+        db_path=settings.resolved_meeting_history_db_path,
+        queue_dir=settings.resolved_upload_queue_dir,
+    )
+    upload_queue_store.enqueue_upload(
+        meeting_id="queued-meeting",
+        audio_data=b"queued-audio",
+        filename="meeting.wav",
+        content_type="audio/wav",
+        scene="general",
+        target_lang=None,
+        provider="demo",
+        glossary_terms=[],
+    )
+    app = FastAPI()
+    app.middleware("http")(observability_middleware)
+    app.include_router(diagnostics_router)
+    app.state.settings = settings
+    app.state.observability_service = observability_service
+    app.state.upload_queue_store = upload_queue_store
+    app.state.asr_provider_service = StubProviderStatusService()
+
+    with TestClient(app) as client:
+        response = client.get("/api/diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["service"]["name"] == settings.service_name
+    assert payload["service"]["demoMode"] is True
+    assert payload["providers"]["statuses"] == [{"provider": "demo", "configured": True}]
+    assert payload["providers"]["operations"][0]["operation"] == "upload_asr"
+    assert payload["uploadQueue"]["byStatus"]["queued"] == 1
+    assert payload["uploadQueue"]["eligibleQueued"] == 1
+    assert str(tmp_path) not in response.text
 
 
 def test_transcribe_batch_returns_final_diarized_speakers() -> None:
@@ -565,6 +654,51 @@ def test_websocket_finalize_emits_transcripts_then_speaker_updates_then_final_ou
     assert detail_payload["transcript_count"] == 2
     assert detail_payload["summary"]["overview"].startswith("The team reviewed")
     assert [item["speaker"] for item in detail_payload["transcripts"]] == ["Speaker 1", "Speaker 2"]
+
+
+def test_live_asr_fallback_records_provider_operation_metrics(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = FailingStartASRClient("volcengine", build_segments())
+    diarization_service = StubDiarizationService(
+        speaker_service,
+        DiarizationResult(succeeded=False, turns=[]),
+    )
+    observability_service = ObservabilityService()
+    app = FastAPI()
+    app.include_router(websocket_router)
+    _, session_manager = build_session_manager(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=diarization_service,
+        default_asr_provider="volcengine",
+        diarization_mode="disabled",
+        observability_service=observability_service,
+    )
+    app.state.session_manager = session_manager
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/meeting?scene=general&provider=volcengine") as websocket:
+            websocket.receive_json()
+            websocket.send_bytes(b"\x00\x00" * 160)
+            receive_until(websocket, lambda messages: any(message["type"] == "transcript" for message in messages))
+            websocket.send_json({"type": "finalize"})
+
+    snapshot = observability_service.snapshot(
+        service_name="test",
+        service_version="0",
+        demo_mode=False,
+        provider_statuses=[],
+        upload_queue={},
+    )
+    metrics = {
+        (item["operation"], item["provider"]): item
+        for item in snapshot["providers"]["operations"]
+    }
+    assert metrics[("live_asr_start", "volcengine")]["error_count"] == 1
+    assert metrics[("live_asr_fallback", "dashscope")]["count"] == 1
 
 
 def test_websocket_hybrid_emits_realtime_speaker_updates_before_final_pyannote(tmp_path) -> None:
@@ -1624,6 +1758,59 @@ def test_upload_worker_processes_persistent_job_and_cleans_queue_payload(tmp_pat
     finalized_meeting = meeting_history_service.get_meeting(payload["meeting_id"])
     assert finalized_meeting is not None
     assert finalized_meeting.status == MeetingHistoryStatus.FINALIZED
+
+
+def test_upload_worker_records_provider_operation_metrics(tmp_path) -> None:
+    speaker_service = SpeakerService()
+    dashscope_client = StubASRClient("dashscope", build_segments())
+    volcengine_client = StubASRClient("volcengine", [], is_configured=False)
+    observability_service = ObservabilityService()
+    settings, meeting_history_service, upload_meeting_service = build_upload_service(
+        tmp_path,
+        speaker_service=speaker_service,
+        dashscope_client=dashscope_client,
+        volcengine_client=volcengine_client,
+        diarization_service=StubDiarizationService(
+            speaker_service,
+            DiarizationResult(succeeded=False, turns=[]),
+        ),
+        default_asr_provider="dashscope",
+        diarization_mode="disabled",
+        embedded_worker_enabled=False,
+        observability_service=observability_service,
+    )
+    queued_meeting = asyncio.run(
+        upload_meeting_service.start_upload(
+            audio_data=b"queued-audio",
+            filename="meeting.wav",
+            content_type="audio/wav",
+            scene="general",
+            target_lang=None,
+            preferred_provider="dashscope",
+            retain_raw_audio=False,
+        )
+    )
+
+    processed_count = asyncio.run(upload_meeting_service.process_available_jobs())
+
+    assert processed_count == 1
+    finalized_meeting = meeting_history_service.get_meeting(queued_meeting.meeting_id)
+    assert finalized_meeting is not None
+    assert finalized_meeting.status == MeetingHistoryStatus.FINALIZED
+    snapshot = observability_service.snapshot(
+        service_name=settings.service_name,
+        service_version=settings.service_version,
+        demo_mode=settings.demo_mode,
+        provider_statuses=[],
+        upload_queue={},
+    )
+    metrics = {
+        (item["operation"], item["provider"]): item
+        for item in snapshot["providers"]["operations"]
+    }
+    assert metrics[("upload_asr", "dashscope")]["count"] == 1
+    assert metrics[("upload_analysis", "dashscope")]["count"] == 1
+    assert metrics[("upload_summary", "dashscope")]["count"] == 1
 
 
 def test_upload_queue_claim_next_does_not_claim_same_job_twice(tmp_path) -> None:

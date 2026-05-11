@@ -25,6 +25,7 @@ from app.services.glossary_store_service import GlossaryStoreService
 from app.services.meeting_analysis_service import MeetingAnalysisService
 from app.services.meeting_history_service import MeetingHistoryService
 from app.services.raw_audio_retention_service import RawAudioRetentionService
+from app.services.observability_service import ObservabilityService
 from app.services.speaker_service import SpeakerService
 from app.services.summary_service import SummaryService
 from app.services.translation_service import TranslationService
@@ -70,6 +71,7 @@ async def run_worker(*, once: bool) -> int:
         upload_queue_store=upload_queue_store,
         embedded_worker_enabled=False,
         upload_queue_processing_timeout_seconds=settings.upload_queue_processing_timeout_seconds,
+        observability_service=ObservabilityService(),
     )
 
     try:

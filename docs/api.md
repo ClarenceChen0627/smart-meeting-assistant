@@ -32,10 +32,59 @@ Returns service metadata, `demoMode`, and provider availability.
 }
 ```
 
+## Diagnostics
+
+`GET /api/diagnostics`
+
+Returns a local runtime diagnostics snapshot for self-hosted troubleshooting. Metrics are process-local and reset when the backend restarts. The response does not include secrets, transcript text, audio paths, or local payload paths.
+
+```json
+{
+  "service": {
+    "name": "Smart Meeting Assistant Backend",
+    "version": "2.0.0",
+    "demoMode": true,
+    "startedAt": "2026-05-11T08:00:00Z",
+    "uptimeSeconds": 123.45,
+    "timestamp": "2026-05-11T08:02:03Z"
+  },
+  "requests": {
+    "total": 42,
+    "byStatus": { "200": 40, "202": 2 }
+  },
+  "providers": {
+    "statuses": [{ "provider": "demo", "configured": true }],
+    "operations": [
+      {
+        "operation": "upload_asr",
+        "provider": "demo",
+        "count": 2,
+        "error_count": 0,
+        "average_latency_seconds": 0.01,
+        "max_latency_seconds": 0.02,
+        "total_latency_seconds": 0.02
+      }
+    ]
+  },
+  "uploadQueue": {
+    "byStatus": { "queued": 1, "completed": 2 },
+    "eligibleQueued": 1,
+    "delayedRetry": 0,
+    "processing": 0,
+    "staleProcessing": 0,
+    "oldestQueuedAgeSeconds": 12.3,
+    "lastErrorCount": 0
+  }
+}
+```
+
+Every HTTP response includes an `X-Request-ID` header. Clients may send the same header to reuse a request id in backend logs.
+
 ## HTTP Endpoints
 
 - `GET /`
 - `GET /api/health`
+- `GET /api/diagnostics`
 - `GET /api/glossary/terms`
 - `POST /api/glossary/terms`
 - `PATCH /api/glossary/terms/{term_id}`
