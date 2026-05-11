@@ -6,7 +6,7 @@ Language:
 
 Baseline document: [`project-requirements.md`](project-requirements.md)
 
-Last updated: `2026-05-08`
+Last updated: `2026-05-11`
 
 Scope: the current `frontend`, `backend`, APIs, persistence, tests, CI, README files, and `docs/` documentation.
 
@@ -27,6 +27,7 @@ The project now satisfies all five baseline requirements and extends them with l
 - SQLite meeting history for live and uploaded meetings.
 - Upload meeting workflow with progressive transcript, translation, analysis, and summary results.
 - Editable saved titles, summary fields, and action item status/content.
+- Local edit audit history for successful title, summary, action item, speaker, and glossary changes.
 - `DEMO_MODE=1` + `provider=demo` for ASR, translation, summary, analysis, upload, and history without external API keys.
 - `GET /api/health` reports `demoMode`, available ASR providers, and provider configuration status.
 - Windows-first Electron shell.
@@ -39,9 +40,10 @@ The project now satisfies all five baseline requirements and extends them with l
 - Translation supports one target language per meeting.
 - Raw audio files are not stored in meeting history.
 - Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs have bounded retry, backoff, stale recovery, and local diagnostics; external monitoring and alerting are still future work.
+- Edit audit history is local and append-only; account actors, retention policy, and version restore UI are not implemented.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.
 
 ## Recommendation
 
-Future work should focus on real-meeting ASR accuracy, terminology handling, upload task recovery, participant-level analysis, multi-target translation, and audit/version history for user-edited outputs.
+Future work should focus on real-meeting ASR accuracy, terminology handling, external monitoring and alerting, participant-level analysis, multi-target translation, and deeper audit governance such as actors, retention, and restore workflows.

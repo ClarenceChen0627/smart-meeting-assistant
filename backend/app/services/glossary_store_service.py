@@ -37,6 +37,18 @@ class GlossaryStoreService:
             ).fetchall()
         return [GlossaryTermRecord.model_validate(dict(row)) for row in rows]
 
+    def get_term(self, term_id: str) -> GlossaryTermRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, term, replacement, note, created_at, updated_at
+                FROM glossary_terms
+                WHERE id = ?
+                """,
+                (term_id,),
+            ).fetchone()
+        return GlossaryTermRecord.model_validate(dict(row)) if row is not None else None
+
     def create_term(self, payload: GlossaryTermCreate) -> GlossaryTermRecord:
         term_key = self._term_key(payload.term)
         timestamp = _utc_now_iso()

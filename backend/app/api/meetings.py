@@ -4,8 +4,13 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, Response, Upl
 
 from app.schemas.meeting_history import MeetingHistoryListItem, MeetingRecord, MeetingSpeakerUpdate, MeetingTitleUpdate
 from app.schemas.summary import ActionItemStatusUpdate, SummaryUpdate
+from app.services.audit_log_service import AuditLogService
 
 router = APIRouter()
+
+
+def _audit_log_service(request: Request):
+    return getattr(request.app.state, "audit_log_service", None)
 
 
 @router.post("/api/meetings/upload", response_model=MeetingRecord, status_code=status.HTTP_202_ACCEPTED)
@@ -53,6 +58,7 @@ async def update_meeting_title(
     meeting_id: str,
     payload: MeetingTitleUpdate,
 ) -> MeetingRecord:
+    before_meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
     try:
         meeting = request.app.state.meeting_history_service.update_title(
             meeting_id,
@@ -63,6 +69,19 @@ async def update_meeting_title(
 
     if meeting is None:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
+    audit_log_service = _audit_log_service(request)
+    if audit_log_service is not None:
+        audit_log_service.record_event(
+            scope=AuditLogService.SCOPE_MEETING,
+            meeting_id=meeting_id,
+            entity_type="meeting",
+            entity_id=meeting_id,
+            action="update",
+            field_path="title",
+            before=before_meeting.title if before_meeting else None,
+            after=meeting.title,
+            metadata={"manual": True},
+        )
     return meeting
 
 
@@ -72,6 +91,7 @@ async def update_meeting_summary(
     meeting_id: str,
     payload: SummaryUpdate,
 ) -> MeetingRecord:
+    before_meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
     try:
         meeting = request.app.state.meeting_history_service.update_summary_fields(
             meeting_id,
@@ -82,6 +102,19 @@ async def update_meeting_summary(
 
     if meeting is None:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
+    audit_log_service = _audit_log_service(request)
+    if audit_log_service is not None:
+        audit_log_service.record_event(
+            scope=AuditLogService.SCOPE_MEETING,
+            meeting_id=meeting_id,
+            entity_type="summary",
+            entity_id=meeting_id,
+            action="update",
+            field_path="summary",
+            before=before_meeting.summary.model_dump() if before_meeting and before_meeting.summary else None,
+            after=meeting.summary.model_dump() if meeting.summary else None,
+            metadata={"manual": True},
+        )
     return meeting
 
 
@@ -91,6 +124,7 @@ async def update_meeting_speakers(
     meeting_id: str,
     payload: MeetingSpeakerUpdate,
 ) -> MeetingRecord:
+    before_meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
     try:
         meeting = request.app.state.meeting_history_service.update_speakers(
             meeting_id,
@@ -101,6 +135,30 @@ async def update_meeting_speakers(
 
     if meeting is None:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
+    before_labels = [item.speaker for item in before_meeting.transcripts] if before_meeting else []
+    after_labels = [item.speaker for item in meeting.transcripts]
+    affected_count = sum(
+        1
+        for index, before_label in enumerate(before_labels)
+        if index < len(after_labels) and before_label != after_labels[index]
+    )
+    audit_log_service = _audit_log_service(request)
+    if audit_log_service is not None:
+        audit_log_service.record_event(
+            scope=AuditLogService.SCOPE_MEETING,
+            meeting_id=meeting_id,
+            entity_type="speaker",
+            entity_id=meeting_id,
+            action="update",
+            field_path="transcripts.speaker",
+            before={"speakers": sorted(set(before_labels))},
+            after={"speakers": sorted(set(after_labels))},
+            metadata={
+                "speaker_updates": [update.model_dump(by_alias=True) for update in payload.speaker_updates],
+                "affected_transcript_count": affected_count,
+                "merge_count": len(payload.speaker_updates) - len({update.to for update in payload.speaker_updates}),
+            },
+        )
     return meeting
 
 
@@ -111,6 +169,14 @@ async def update_action_item_status(
     action_item_index: int,
     payload: ActionItemStatusUpdate,
 ) -> MeetingRecord:
+    before_meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
+    before_item = (
+        before_meeting.summary.action_items[action_item_index].model_dump()
+        if before_meeting
+        and before_meeting.summary
+        and 0 <= action_item_index < len(before_meeting.summary.action_items)
+        else None
+    )
     try:
         meeting = request.app.state.meeting_history_service.update_action_item_status(
             meeting_id,
@@ -124,6 +190,24 @@ async def update_action_item_status(
 
     if meeting is None:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
+    after_item = (
+        meeting.summary.action_items[action_item_index].model_dump()
+        if meeting.summary and 0 <= action_item_index < len(meeting.summary.action_items)
+        else None
+    )
+    audit_log_service = _audit_log_service(request)
+    if audit_log_service is not None:
+        audit_log_service.record_event(
+            scope=AuditLogService.SCOPE_MEETING,
+            meeting_id=meeting_id,
+            entity_type="action_item",
+            entity_id=str(action_item_index),
+            action="update",
+            field_path=f"summary.action_items[{action_item_index}].status",
+            before=before_item,
+            after=after_item,
+            metadata={"action_item_index": action_item_index},
+        )
     return meeting
 
 

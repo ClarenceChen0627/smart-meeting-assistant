@@ -89,8 +89,10 @@ Language:
 - `POST /api/glossary/terms`
 - `PATCH /api/glossary/terms/{term_id}`
 - `DELETE /api/glossary/terms/{term_id}`
+- `GET /api/audit-events`
 - `GET /api/meetings`
 - `GET /api/meetings/{meeting_id}`
+- `GET /api/meetings/{meeting_id}/audit-events`
 - `PATCH /api/meetings/{meeting_id}/title`
 - `PATCH /api/meetings/{meeting_id}/summary`
 - `PATCH /api/meetings/{meeting_id}/speakers`
@@ -136,6 +138,40 @@ Language:
 `PATCH /api/glossary/terms/{term_id}` 可更新 `term`、`replacement`、`note` 的任意子集。`DELETE /api/glossary/terms/{term_id}` 删除已保存术语。
 
 重复术语按大小写不敏感方式返回 `409 Conflict`。如果单场会议术语和已保存术语的 `term` 相同，单场会议术语优先。
+
+## 审计事件
+
+成功提交的人工编辑会写入 `MEETING_HISTORY_DB_PATH` 指向的本地 SQLite 数据库。审计范围包括会议标题编辑、summary 编辑、action item 状态编辑、speaker 修正，以及全局术语的新增、更新和删除。v1 不审计 ASR/LLM 自动生成内容、上传 worker 状态流转或会议删除。
+
+`GET /api/meetings/{meeting_id}/audit-events`
+
+返回指定会议最近的审计事件，按时间倒序排列。可选 `limit` query 参数默认 100，最大 500。
+
+```json
+[
+  {
+    "id": "a1b2c3",
+    "scope": "meeting",
+    "meeting_id": "meeting-1",
+    "entity_type": "speaker",
+    "entity_id": "meeting-1",
+    "action": "update",
+    "field_path": "transcripts.speaker",
+    "before": { "speakers": ["Speaker 1", "Speaker 2"] },
+    "after": { "speakers": ["Alice", "Speaker 2"] },
+    "metadata": {
+      "speaker_updates": [{ "from": "Speaker 1", "to": "Alice" }],
+      "affected_transcript_count": 3,
+      "merge_count": 0
+    },
+    "created_at": "2026-05-11T08:00:00Z"
+  }
+]
+```
+
+`GET /api/audit-events?scope=global&entity_type=glossary_term`
+
+返回全局审计事件，主要用于本地排障和后续 UI 扩展。全局术语事件使用 `scope: "global"`，并且 `meeting_id` 为 `null`。
 
 ## Speaker 修正
 

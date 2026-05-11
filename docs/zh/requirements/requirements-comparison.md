@@ -6,7 +6,7 @@ Language:
 
 基准文档：[`project-requirements.md`](../../requirements/project-requirements.md)
 
-更新时间：`2026-05-08`
+更新时间：`2026-05-11`
 
 评估范围：当前仓库中的 `frontend`、`backend`、API、持久化、测试、CI、README 与 `docs/` 文档。
 
@@ -106,7 +106,7 @@ Language:
 - SQLite 会议历史：保存 live/upload 会议的 transcript、translation、summary、action items 和 analysis。
 - 历史会议抽屉：支持打开、查看、删除、重命名历史会议。
 - 上传会议模式：支持上传会议音频文件，异步转写、翻译、分析、总结，并复用实时会议结果页面。
-- 可编辑历史内容：支持会议标题重命名、Summary 结构化编辑、Action Items 状态和内容维护。
+- 可编辑历史内容：支持会议标题重命名、Summary 结构化编辑、Action Items 状态和内容维护，并为成功提交的标题、summary、action item、speaker 和 glossary 编辑记录本地审计历史。
 - Demo 模式：`DEMO_MODE=1` + `provider=demo` 可以无外部 API key 跑通 ASR、translation、summary、analysis、upload 和 history。
 - 健康检查增强：`GET /api/health` 返回 `demoMode`、可用 ASR provider 和 provider 配置状态。
 - Electron 桌面壳：前端可作为 Windows-first Electron 客户端运行，但后端仍需单独启动。
@@ -119,6 +119,7 @@ Language:
 - 翻译当前是单目标语言，不支持一次会议同时输出多种目标语言。
 - 原始音频文件不进入会议历史持久化。
 - 上传处理使用 SQLite 持久队列，默认由内置 worker 消费；任务已有有限次数重试、backoff、stale recovery 和本地 diagnostics，外部监控与告警仍是后续工作。
+- 编辑审计历史是本地 append-only 记录，暂不包含账号 actor、保留策略或版本恢复 UI。
 - Sentiment / engagement analysis 是会议级，不是参与者级。
 - ASR、summary、analysis 仍可能受模型识别错误、术语识别和中英混说影响。
 - Demo 模式只用于本地演示、开发和 CI smoke test，不代表真实模型质量。
@@ -130,7 +131,7 @@ Language:
 后续重点建议放在：
 
 1. 提升真实会议场景下的 ASR 和术语识别稳定性。
-2. 引入更可靠的上传任务队列、任务恢复和进度管理。
+2. 接入外部监控、告警和更完整的运行治理。
 3. 增强多语言场景，例如多目标语言并行输出。
 4. 增加参与者级 engagement / sentiment 分析。
-5. 为用户编辑内容增加审计历史或版本恢复能力。
+5. 为用户编辑内容增加 actor、保留策略和版本恢复等更完整的审计治理能力。

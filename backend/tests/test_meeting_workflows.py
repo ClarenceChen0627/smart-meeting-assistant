@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.audit import router as audit_router
 from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.meetings import router as meetings_router
@@ -17,6 +18,7 @@ from app.clients.demo_asr_client import DemoASRClient
 from app.clients.demo_dashscope_client import DemoDashScopeClient
 from app.clients.volcengine_asr_client import VolcengineTranscriptSegment
 from app.services.asr_provider_service import ASRProviderService
+from app.services.audit_log_service import AuditLogService
 from app.core.config import Settings
 from app.schemas.analysis import MeetingAnalysis, MeetingAnalysisHighlight, MeetingSignalCounts, ParticipantAnalysis
 from app.schemas.glossary import GlossaryTermCreate
@@ -542,6 +544,139 @@ def test_diagnostics_returns_runtime_counters_and_queue_summary_without_paths(tm
     assert payload["uploadQueue"]["byStatus"]["queued"] == 1
     assert payload["uploadQueue"]["eligibleQueued"] == 1
     assert str(tmp_path) not in response.text
+
+
+def test_audit_service_filters_meeting_and_global_events(tmp_path) -> None:
+    audit_service = AuditLogService(tmp_path / "meeting_history.sqlite3")
+    audit_service.record_event(
+        scope=AuditLogService.SCOPE_MEETING,
+        meeting_id="meeting-1",
+        entity_type="meeting",
+        entity_id="meeting-1",
+        action="update",
+        field_path="title",
+        before="Old",
+        after="New",
+    )
+    audit_service.record_event(
+        scope=AuditLogService.SCOPE_GLOBAL,
+        entity_type="glossary_term",
+        entity_id="term-1",
+        action="create",
+        after={"term": "Qwen"},
+    )
+
+    meeting_events = audit_service.list_meeting_events("meeting-1")
+    global_events = audit_service.list_events(scope=AuditLogService.SCOPE_GLOBAL, entity_type="glossary_term")
+
+    assert len(meeting_events) == 1
+    assert meeting_events[0].meeting_id == "meeting-1"
+    assert meeting_events[0].before == "Old"
+    assert meeting_events[0].after == "New"
+    assert len(global_events) == 1
+    assert global_events[0].scope == "global"
+
+
+def test_meeting_edit_endpoints_write_audit_events(tmp_path) -> None:
+    meeting_history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    audit_service = AuditLogService(tmp_path / "meeting_history.sqlite3")
+    meeting_history_service.create_meeting(
+        meeting_id="meeting-audit",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+    )
+    meeting_history_service.upsert_transcript(
+        "meeting-audit",
+        TranscriptItem(
+            transcript_index=0,
+            speaker="Speaker 1",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="I will send the update today",
+            start=0,
+            end=1,
+        ),
+    )
+    meeting_history_service.upsert_transcript(
+        "meeting-audit",
+        TranscriptItem(
+            transcript_index=1,
+            speaker="Speaker 2",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="Thanks",
+            start=1,
+            end=2,
+        ),
+    )
+    meeting_history_service.update_summary(
+        "meeting-audit",
+        MeetingSummary(
+            title="Original title",
+            overview="Original overview",
+            key_topics=["Planning"],
+            action_items=[
+                {
+                    "task": "Send the update",
+                    "assignee": "Speaker 1",
+                    "deadline": "today",
+                    "status": "pending",
+                    "source_excerpt": "I will send the update today",
+                    "transcript_index": 0,
+                    "is_actionable": True,
+                    "confidence": 0.9,
+                    "owner_explicit": True,
+                    "deadline_explicit": True,
+                }
+            ],
+            decisions=[],
+            risks=[],
+        ),
+    )
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(audit_router)
+    app.state.meeting_history_service = meeting_history_service
+    app.state.audit_log_service = audit_service
+
+    with TestClient(app) as client:
+        title_response = client.patch("/api/meetings/meeting-audit/title", json={"title": "Renamed meeting"})
+        summary_response = client.patch(
+            "/api/meetings/meeting-audit/summary",
+            json={
+                "overview": "Edited overview",
+                "key_topics": ["Planning", "Launch"],
+                "action_items": title_response.json()["summary"]["action_items"],
+                "decisions": ["Ship"],
+                "risks": [],
+            },
+        )
+        action_response = client.patch(
+            "/api/meetings/meeting-audit/action-items/0",
+            json={"status": "completed"},
+        )
+        speaker_response = client.patch(
+            "/api/meetings/meeting-audit/speakers",
+            json={"speaker_updates": [{"from": "Speaker 1", "to": "Alice"}]},
+        )
+        audit_response = client.get("/api/meetings/meeting-audit/audit-events")
+        missing_response = client.patch("/api/meetings/missing/title", json={"title": "Nope"})
+
+    assert title_response.status_code == 200
+    assert summary_response.status_code == 200
+    assert action_response.status_code == 200
+    assert speaker_response.status_code == 200
+    assert missing_response.status_code == 404
+    assert audit_response.status_code == 200
+    events = audit_response.json()
+    assert {event["entity_type"] for event in events} == {"speaker", "action_item", "summary", "meeting"}
+    title_event = next(event for event in events if event["field_path"] == "title")
+    assert title_event["before"] == "Original title"
+    assert title_event["after"] == "Renamed meeting"
+    speaker_event = next(event for event in events if event["entity_type"] == "speaker")
+    assert speaker_event["metadata"]["affected_transcript_count"] == 1
+    assert len(audit_service.list_events(meeting_id="missing")) == 0
 
 
 def test_transcribe_batch_returns_final_diarized_speakers() -> None:
