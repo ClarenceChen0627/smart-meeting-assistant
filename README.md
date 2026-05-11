@@ -189,7 +189,7 @@ docker-compose up --build
 
 - Short term: real-meeting upload quality evaluation package is established for private audio manifests, local provider runs, automated checks, and manual review reports.
 - Medium term: real-meeting accuracy and correction workflows are implemented, including persistent glossaries, speaker rename/merge, mobile recording reliability, and rolling in-meeting summaries.
-- Long term: strengthen quality governance and production reliability with provider quality/cost evaluation, distributed upload queues, task recovery, observability, and edit audit history.
+- Long term: quality governance and production reliability are implemented, including provider quality/cost evaluation, SQLite-backed upload queues, task recovery, local observability, and edit audit history.
 
 ## License
 
