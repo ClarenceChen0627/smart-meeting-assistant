@@ -120,6 +120,13 @@ Speaker corrections are persisted through `PATCH /api/meetings/{meeting_id}/spea
 
 `GlossaryStoreService` uses the same local SQLite file to store global terminology terms. `GlossaryService.resolve_terms()` merges per-meeting terms, saved global terms, and `CUSTOM_GLOSSARY_TERMS` in that order, deduplicating by case-insensitive `term` and keeping the same 50-term processing limit.
 
+`AuditLogService` also uses the same SQLite file and creates an `audit_events` table for successful manual edits. Each event stores `scope`, `meeting_id`, `entity_type`, `entity_id`, `action`, `field_path`, JSON `before` / `after` snapshots, JSON `metadata`, and `created_at`. Meeting-scoped events cover title, summary, action item status, and speaker correction edits. Global events cover glossary term create/update/delete operations. The audit log intentionally does not record ASR/LLM generated content, upload worker state changes, or meeting deletion in v1.
+
+Audit query APIs are read-only:
+
+- `GET /api/meetings/{meeting_id}/audit-events` returns recent events for a saved meeting, newest first.
+- `GET /api/audit-events?scope=global&entity_type=glossary_term` returns global glossary audit events for local troubleshooting and future UI use.
+
 Meeting notes can be exported from the summary panel as a Markdown file. The export is generated in the frontend from the displayed summary, meeting date, duration, risks, decisions, action items, and transcript references; no backend export endpoint is required.
 
 ## 8. Frontend State Model
@@ -132,9 +139,12 @@ Meeting notes can be exported from the summary panel as a Markdown file. The exp
 - active upload meeting state
 - selected history meeting state
 - transcript, summary, action item, and analysis display state
+- selected meeting audit events
 - saved glossary terms and per-meeting temporary glossary input
 
 The top-level Live / Upload switch reuses the same result workspace. Historical meetings override the current live/upload view until the user exits history selection.
+
+When a historical meeting is selected, the frontend loads meeting audit events into the history workspace and shows an `Audit` tab. Successful title, summary, action item, and speaker edits refresh the audit list after the meeting record update. Global glossary audit events are available through the API but are not shown in the meeting workspace.
 
 ## 9. Configuration And Demo Mode
 
@@ -171,9 +181,10 @@ Backend tests use pytest and must run through `backend/.venv`. Existing coverage
 - live WebSocket workflow
 - upload workflow
 - history persistence and migration
+- edit audit history persistence and query behavior
 - demo provider health, WebSocket, upload, and disabled-mode behavior
 
-The frontend uses Vitest with React Testing Library for interaction coverage. Current frontend tests cover upload status messaging, ASR provider options, upload control state, summary editing, Markdown meeting notes export, and export formatting. `npm run build` remains the primary bundle verification step.
+The frontend uses Vitest with React Testing Library for interaction coverage. Current frontend tests cover upload status messaging, ASR provider options, upload control state, summary editing, audit history rendering, Markdown meeting notes export, and export formatting. `npm run build` remains the primary bundle verification step.
 
 The Windows-first CI workflow installs backend and frontend dependencies, runs backend pytest, runs frontend tests, and builds the Vite frontend.
 
@@ -199,5 +210,6 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 - Raw audio is not stored in meeting history.
 - Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Upload jobs now have bounded retry, backoff, stale-claim recovery, and local diagnostics; external monitoring and alerting remain future work.
 - Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
+- Edit audit history is local and append-only; v1 has no account actor, retention policy, or version restore UI.
 - Sentiment and engagement analysis is meeting-level, not participant-level.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.

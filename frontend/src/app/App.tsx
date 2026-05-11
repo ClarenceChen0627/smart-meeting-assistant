@@ -3,6 +3,7 @@ import { AlertCircle, History, Mic, MicOff, Pause, Play, RotateCcw } from 'lucid
 
 import { ActionItemsPanel } from './components/ActionItemsPanel';
 import { ASRProviderControls } from './components/ASRProviderControls';
+import { AuditTrailPanel } from './components/AuditTrailPanel';
 import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
 import { MeetingHistorySheet } from './components/MeetingHistorySheet';
 import { MeetingProcessingSettings } from './components/MeetingProcessingSettings';
@@ -18,6 +19,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import type {
   ActionItemStatus,
   ASRProvider,
+  AuditEventRecord,
   GlossaryTermCreate,
   GlossaryTermRecord,
   GlossaryTermUpdate,
@@ -34,6 +36,7 @@ import type {
 } from '../types';
 
 type InputMode = 'live' | 'upload';
+type WorkspaceTab = 'transcript' | 'summary' | 'actions' | 'analysis' | 'audit';
 
 interface DisplayTranscriptItem extends TranscriptItem {
   id: string;
@@ -131,7 +134,7 @@ const formatHistoryTimestamp = (value: string) =>
   }).format(new Date(value));
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'transcript' | 'summary' | 'actions' | 'analysis'>('transcript');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('transcript');
   const [inputMode, setInputMode] = useState<InputMode>('live');
   const [currentScene, setCurrentScene] = useState<string>('general');
   const [isRecording, setIsRecording] = useState(false);
@@ -166,6 +169,9 @@ export default function App() {
   const [deletingMeetingId, setDeletingMeetingId] = useState<string | null>(null);
   const [isSavingSummary, setIsSavingSummary] = useState(false);
   const [isSavingSpeakers, setIsSavingSpeakers] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([]);
+  const [isAuditLoading, setIsAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
 
   const [statusMessage, setStatusMessage] = useState('Ready to start meeting');
   const [serverError, setServerError] = useState('');
@@ -308,10 +314,40 @@ export default function App() {
     return payload;
   };
 
+  const loadMeetingAuditEvents = async (meetingId: string) => {
+    try {
+      setIsAuditLoading(true);
+      setAuditError('');
+      const response = await fetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/audit-events`);
+      if (!response.ok) {
+        throw new Error(`Failed to load audit history (${response.status})`);
+      }
+      const payload = await response.json() as AuditEventRecord[];
+      setAuditEvents(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load audit history';
+      setAuditError(message);
+    } finally {
+      setIsAuditLoading(false);
+    }
+  };
+
+  const refreshSelectedAuditEvents = (meetingId: string) => {
+    if (historyMeeting?.meeting_id === meetingId) {
+      void loadMeetingAuditEvents(meetingId);
+    }
+  };
+
   useEffect(() => {
     void loadHistoryList();
     void loadGlobalGlossaryTerms();
   }, []);
+
+  useEffect(() => {
+    if (!historyMeeting && activeTab === 'audit') {
+      setActiveTab('transcript');
+    }
+  }, [activeTab, historyMeeting]);
 
   useEffect(() => {
     const meetingIds = Array.from(
@@ -450,6 +486,8 @@ export default function App() {
     }
     setInputMode(mode);
     setHistoryMeeting(null);
+    setAuditEvents([]);
+    setAuditError('');
   };
 
   const handleUploadFileChange = (file: File | null) => {
@@ -580,6 +618,7 @@ export default function App() {
       setServerError('');
       const payload = await refreshMeetingDetail(meetingId);
       setHistoryMeeting(payload);
+      void loadMeetingAuditEvents(meetingId);
       setIsHistorySheetOpen(false);
     } catch (error) {
       setServerError(error instanceof Error ? error.message : 'Failed to load meeting record');
@@ -603,6 +642,8 @@ export default function App() {
 
       if (historyMeeting?.meeting_id === meetingId) {
         setHistoryMeeting(null);
+        setAuditEvents([]);
+        setAuditError('');
       }
 
       if (activeUploadMeeting?.meeting_id === meetingId) {
@@ -656,6 +697,7 @@ export default function App() {
 
     if (historyMeeting?.meeting_id === payload.meeting_id) {
       setHistoryMeeting(payload);
+      refreshSelectedAuditEvents(payload.meeting_id);
     }
 
     if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
@@ -694,6 +736,7 @@ export default function App() {
 
     if (historyMeeting?.meeting_id === payload.meeting_id) {
       setHistoryMeeting(payload);
+      refreshSelectedAuditEvents(payload.meeting_id);
     }
 
     if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
@@ -731,6 +774,7 @@ export default function App() {
 
       if (historyMeeting?.meeting_id === payload.meeting_id) {
         setHistoryMeeting(payload);
+        refreshSelectedAuditEvents(payload.meeting_id);
       }
 
       if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
@@ -779,6 +823,7 @@ export default function App() {
 
       if (historyMeeting?.meeting_id === payload.meeting_id) {
         setHistoryMeeting(payload);
+        refreshSelectedAuditEvents(payload.meeting_id);
       }
 
       if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
@@ -852,11 +897,12 @@ export default function App() {
       ? buildUploadStatusMessage(activeUploadMeeting, isUploadingFile)
       : statusMessage;
 
-  const tabs = [
+  const tabs: Array<{ id: WorkspaceTab; label: string }> = [
     { id: 'transcript', label: 'Transcript' },
     { id: 'summary', label: 'Summary' },
     { id: 'actions', label: 'Action Items' },
-    { id: 'analysis', label: 'Analysis' }
+    { id: 'analysis', label: 'Analysis' },
+    ...(isHistoryView ? [{ id: 'audit' as WorkspaceTab, label: 'Audit' }] : []),
   ];
 
   return (
@@ -1029,7 +1075,7 @@ export default function App() {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as 'transcript' | 'summary' | 'actions' | 'analysis')}
+              onClick={() => setActiveTab(tab.id)}
               className={`px-6 py-3 text-sm transition-colors relative ${
                 activeTab === tab.id
                   ? 'text-blue-600'
@@ -1180,6 +1226,13 @@ export default function App() {
           )}
           {activeTab === 'analysis' && (
             <MeetingAnalysisPanel analysis={displayedAnalysis} transcripts={displayedTranscripts} />
+          )}
+          {activeTab === 'audit' && (
+            <AuditTrailPanel
+              events={auditEvents}
+              isLoading={isAuditLoading}
+              error={auditError}
+            />
           )}
         </div>
       </div>

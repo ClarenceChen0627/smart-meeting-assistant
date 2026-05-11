@@ -182,6 +182,7 @@ docker-compose up --build
 - 实时 ASR 在术语表纠错前仍可能误识别技术术语。
 - 移动端后台和锁屏录音仍受操作系统与浏览器限制；前端会检测常见中断并提示用户。
 - Upload processing 使用 SQLite 持久队列，默认由内置 worker 消费；任务已有有限次数重试、backoff、stale recovery 和本地 diagnostics，外部监控与告警仍是后续工作。
+- 成功提交的人工编辑已有本地审计历史；账号 actor、保留策略和版本恢复仍属于后续治理工作。
 
 ## Roadmap
 

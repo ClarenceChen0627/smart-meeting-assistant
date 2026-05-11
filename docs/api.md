@@ -89,8 +89,10 @@ Every HTTP response includes an `X-Request-ID` header. Clients may send the same
 - `POST /api/glossary/terms`
 - `PATCH /api/glossary/terms/{term_id}`
 - `DELETE /api/glossary/terms/{term_id}`
+- `GET /api/audit-events`
 - `GET /api/meetings`
 - `GET /api/meetings/{meeting_id}`
+- `GET /api/meetings/{meeting_id}/audit-events`
 - `PATCH /api/meetings/{meeting_id}/title`
 - `PATCH /api/meetings/{meeting_id}/summary`
 - `PATCH /api/meetings/{meeting_id}/speakers`
@@ -136,6 +138,40 @@ Returns saved terms:
 `PATCH /api/glossary/terms/{term_id}` accepts any subset of `term`, `replacement`, and `note`. `DELETE /api/glossary/terms/{term_id}` removes a saved term.
 
 Duplicate terms are rejected case-insensitively with `409 Conflict`. Per-meeting terms take precedence when a saved term uses the same `term`.
+
+## Audit Events
+
+Successful manual edits are recorded in the local SQLite database configured by `MEETING_HISTORY_DB_PATH`. The audit log covers meeting title edits, summary edits, action item status edits, speaker corrections, and global glossary term create/update/delete operations. It does not record ASR/LLM generated content, upload worker state transitions, or meeting deletion in v1.
+
+`GET /api/meetings/{meeting_id}/audit-events`
+
+Returns recent audit events for one meeting, ordered newest first. The optional `limit` query parameter defaults to 100 and is capped at 500.
+
+```json
+[
+  {
+    "id": "a1b2c3",
+    "scope": "meeting",
+    "meeting_id": "meeting-1",
+    "entity_type": "speaker",
+    "entity_id": "meeting-1",
+    "action": "update",
+    "field_path": "transcripts.speaker",
+    "before": { "speakers": ["Speaker 1", "Speaker 2"] },
+    "after": { "speakers": ["Alice", "Speaker 2"] },
+    "metadata": {
+      "speaker_updates": [{ "from": "Speaker 1", "to": "Alice" }],
+      "affected_transcript_count": 3,
+      "merge_count": 0
+    },
+    "created_at": "2026-05-11T08:00:00Z"
+  }
+]
+```
+
+`GET /api/audit-events?scope=global&entity_type=glossary_term`
+
+Returns global audit events, primarily for local troubleshooting and future UI use. Global glossary events use `scope: "global"` and `meeting_id: null`.
 
 ## Speaker Corrections
 

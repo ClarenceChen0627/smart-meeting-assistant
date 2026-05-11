@@ -43,6 +43,20 @@ export interface GlossaryTermUpdate {
   note?: string | null
 }
 
+export interface AuditEventRecord {
+  id: string
+  scope: 'meeting' | 'global'
+  meeting_id: string | null
+  entity_type: string
+  entity_id: string | null
+  action: string
+  field_path: string | null
+  before: unknown
+  after: unknown
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export interface SpeakerLabelUpdate {
   from: string
   to: string

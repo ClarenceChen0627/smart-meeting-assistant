@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app.api.audit import router as audit_router
 from app.api.diagnostics import router as diagnostics_router
 from app.api.health import router as health_router
 from app.api.glossary import router as glossary_router
@@ -23,6 +24,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.middleware.observability import observability_middleware
 from app.services.audio_codec_service import AudioCodecService
+from app.services.audit_log_service import AuditLogService
 from app.services.asr_provider_service import ASRProviderService
 from app.services.diarization_service import DiarizationService
 from app.services.glossary_service import GlossaryService
@@ -65,6 +67,7 @@ async def lifespan(app: FastAPI):
     translation_service = TranslationService(dashscope_client)
     raw_audio_retention_service = RawAudioRetentionService(settings)
     observability_service = ObservabilityService()
+    audit_log_service = AuditLogService(settings.resolved_meeting_history_db_path)
     meeting_history_service = MeetingHistoryService(settings.resolved_meeting_history_db_path)
     upload_queue_store = UploadQueueStore(
         db_path=settings.resolved_meeting_history_db_path,
@@ -124,6 +127,7 @@ async def lifespan(app: FastAPI):
     app.state.glossary_store_service = glossary_store_service
     app.state.raw_audio_retention_service = raw_audio_retention_service
     app.state.observability_service = observability_service
+    app.state.audit_log_service = audit_log_service
     app.state.upload_queue_store = upload_queue_store
     app.state.meeting_history_service = meeting_history_service
     app.state.upload_meeting_service = upload_meeting_service
@@ -192,6 +196,7 @@ app.add_middleware(
 
 app.middleware("http")(observability_middleware)
 
+app.include_router(audit_router)
 app.include_router(diagnostics_router)
 app.include_router(health_router)
 app.include_router(glossary_router)

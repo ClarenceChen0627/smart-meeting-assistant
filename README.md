@@ -183,6 +183,7 @@ docker-compose up --build
 - Realtime ASR can still misrecognize technical terms before glossary correction runs.
 - Mobile background and lock-screen recording remains limited by the operating system and browser; the frontend detects common interruptions and warns the user.
 - Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs now have bounded retry, backoff, stale recovery, and local diagnostics; external monitoring and alerting are still future work.
+- Edit audit history is stored locally for successful manual edits; account actors, retention policy, and version restore remain future governance work.
 
 ## Roadmap
 
