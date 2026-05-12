@@ -11,6 +11,7 @@
     "dev": "vite",
     "preview": "vite preview",
     "test": "vitest run",
+    "smoke:memory-browser": "node scripts/smoke-memory-browser.mjs",
     "dev:electron": "concurrently -k -n vite,electron -c blue,green \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "electron:pack": "npm run build && electron-builder --win portable"
   },

@@ -25,6 +25,7 @@ The project now satisfies all five baseline requirements and extends them with l
 ## Beyond The Baseline
 
 - SQLite meeting history for live and uploaded meetings.
+- Cross-meeting Memory workspace for project/tag collections, action item rollups, decision logs, risks, open questions, and next-meeting briefs.
 - Upload meeting workflow with progressive transcript, translation, analysis, and summary results.
 - Editable saved titles, summary fields, and action item status/content.
 - Local edit/delete audit history for successful title, meeting metadata, summary, action item, speaker, meeting deletion, and glossary changes.
@@ -46,4 +47,4 @@ The project now satisfies all five baseline requirements and extends them with l
 
 ## Recommendation
 
-Future work should focus on real-meeting ASR accuracy, terminology handling, external monitoring and alerting, richer participant analytics, multi-target translation, and deeper audit governance such as actors, retention, and restore workflows.
+Future work should focus on real-meeting ASR accuracy, terminology handling, external monitoring and alerting, richer participant analytics, multi-target translation, deeper memory extraction, and deeper audit governance such as actors, retention, and restore workflows.

@@ -197,6 +197,102 @@ export interface MeetingRecord extends MeetingHistoryListItem {
   analysis: MeetingAnalysis | null
 }
 
+export type MemoryCollectionType = 'all' | 'tag' | 'scene'
+
+export interface MemoryMeetingReference {
+  meeting_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  scene: string
+  source_type: MeetingSourceType
+  tags: string[]
+}
+
+export interface MemorySourceReference extends MemoryMeetingReference {
+  transcript_index: number | null
+  source_excerpt: string
+}
+
+export interface MemoryCollection {
+  collection_id: string
+  collection_type: MemoryCollectionType
+  name: string
+  meeting_count: number
+  finalized_count: number
+  open_action_count: number
+  completed_action_count: number
+  decision_count: number
+  risk_count: number
+  open_question_count: number
+  updated_at: string | null
+}
+
+export interface MemoryStats {
+  meeting_count: number
+  finalized_count: number
+  action_count: number
+  open_action_count: number
+  completed_action_count: number
+  decision_count: number
+  risk_count: number
+  open_question_count: number
+}
+
+export interface MemoryActionItem {
+  id: string
+  action_item_index: number
+  task: string
+  assignee: string
+  deadline: string
+  status: ActionItemStatus
+  source_excerpt: string
+  confidence: number
+  owner_explicit: boolean
+  deadline_explicit: boolean
+  source: MemorySourceReference
+}
+
+export interface MemoryDecisionItem {
+  id: string
+  decision: string
+  source: MemorySourceReference
+}
+
+export interface MemoryRiskItem {
+  id: string
+  risk: string
+  source: MemorySourceReference
+}
+
+export interface MemoryOpenQuestionItem {
+  id: string
+  question: string
+  source: MemorySourceReference
+}
+
+export interface NextMeetingBrief {
+  collection_id: string
+  collection_name: string
+  generated_at: string
+  recap: string
+  agenda: string[]
+  suggested_focus: string[]
+  recent_meetings: MemoryMeetingReference[]
+}
+
+export interface MeetingMemoryOverview {
+  collection_id: string
+  generated_at: string
+  collections: MemoryCollection[]
+  stats: MemoryStats
+  action_items: MemoryActionItem[]
+  decisions: MemoryDecisionItem[]
+  risks: MemoryRiskItem[]
+  open_questions: MemoryOpenQuestionItem[]
+  next_meeting_brief: NextMeetingBrief
+}
+
 export interface WebSocketMessage {
   type: 'session_started' | 'transcript' | 'transcript_update' | 'speaker_update' | 'translation' | 'analysis' | 'rolling_summary' | 'summary' | 'error'
   data: SessionStarted | TranscriptItem | SpeakerUpdate | TranscriptTranslation | MeetingAnalysis | MeetingSummary | string

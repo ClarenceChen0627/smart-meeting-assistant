@@ -7,6 +7,9 @@
 - Added optional API token protection for private deployments.
 - Added configurable CORS, security response headers, and upload size/type limits.
 - Added meeting history search/filter UI with favorites, archive state, and tags.
+- Added a cross-meeting Memory workspace with project/tag collections, action item rollups, decision/risk/open-question tracking, and next-meeting briefs.
+- Added `GET /api/memory` for SQLite-backed cross-meeting memory aggregation.
+- Added a dependency-free real-browser Memory workspace smoke test command.
 - Added Markdown export variants for standard notes, Chinese minutes, and action-item-only delivery.
 - Added participant-level analysis details for speaker sentiment, engagement, speaking time, and interaction signals.
 - Split frontend production vendor chunks for charts, icons, Radix UI, and shared vendor code to reduce oversized entry bundles.
