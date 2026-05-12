@@ -79,6 +79,28 @@ const buildMeetingTitle = (meeting: MeetingHistoryListItem) => {
   return `${sceneLabels[meeting.scene] || meeting.scene} ${formatTimestamp(meeting.created_at)}`;
 };
 
+export const normalizeMeetingTags = (value: string): string[] => {
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  for (const rawTag of value.split(',')) {
+    const normalized = rawTag.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      continue;
+    }
+    const tag = normalized.slice(0, 32);
+    const key = tag.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length >= 20) {
+      break;
+    }
+  }
+  return tags;
+};
+
 export function MeetingHistorySheet({
   open,
   onOpenChange,
@@ -185,10 +207,7 @@ export function MeetingHistorySheet({
     if (value === null) {
       return;
     }
-    const tags = value
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean);
+    const tags = normalizeMeetingTags(value);
     void updateMetadata(meeting.meeting_id, { tags });
   };
 
@@ -292,9 +311,9 @@ export function MeetingHistorySheet({
                       isSelected ? 'border-blue-300 bg-blue-50/60' : 'border-gray-200 bg-white'
                     }`}
                   >
-                    <div className="flex items-start gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className={`rounded-full border px-2 py-0.5 text-xs ${statusClasses[meeting.status]}`}>
                             {meeting.status}
                           </span>
@@ -364,13 +383,13 @@ export function MeetingHistorySheet({
                             disabled={isOpening || isDeleting}
                             className="mt-3 block w-full text-left disabled:cursor-wait"
                           >
-                            <h3 className="text-sm font-medium text-gray-900">
+                            <h3 className="break-words text-sm font-medium text-gray-900">
                               {buildMeetingTitle(meeting)}
                             </h3>
                           </button>
                         )}
 
-                        <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+                        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-500 sm:gap-4">
                           <span className="flex items-center gap-1">
                             <CalendarDays className="h-3.5 w-3.5" />
                             {formatTimestamp(meeting.updated_at)}
@@ -386,7 +405,7 @@ export function MeetingHistorySheet({
                           {meeting.preview_text || 'No summary preview available yet.'}
                         </p>
                         {meeting.source_name && (
-                          <p className="mt-2 text-xs text-gray-500">File: {meeting.source_name}</p>
+                          <p className="mt-2 break-all text-xs text-gray-500">File: {meeting.source_name}</p>
                         )}
                         {meeting.tags.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1">
@@ -405,7 +424,7 @@ export function MeetingHistorySheet({
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2 sm:justify-start">
                         {isOpening && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
                         <button
                           type="button"

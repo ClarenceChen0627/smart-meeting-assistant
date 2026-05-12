@@ -40,7 +40,7 @@ smart-meeting-assistant/
 | Meeting summarization | `SummaryService`, `MeetingSummary`, `SummaryPanel.tsx` | Final transcript rows are sent to the configured LLM or demo client; JSON is parsed, cleaned, augmented, persisted, and rendered. |
 | Transcript translation | `TranslationService`, `DashScopeClient.translate_text`, `SessionManager._consume_translations`, `TranscriptPanel.tsx` | Final transcript rows are translated to one selected target language and saved with the transcript row. |
 | Context-aware action items | `SummaryService`, `ActionItem`, `ActionItemsPanel.tsx`, meeting history APIs | The model returns action items; backend rules filter and augment them; the frontend supports editing and completion status updates. |
-| Sentiment and engagement analysis | `SentimentAnalysisService`, `MeetingAnalysis`, `MeetingAnalysisPanel.tsx` | The backend creates incremental and final meeting-level analysis snapshots, with rule fallback for obvious interaction signals. |
+| Sentiment and engagement analysis | `MeetingAnalysisService`, `MeetingAnalysis`, `MeetingAnalysisPanel.tsx` | The backend creates incremental and final meeting-level snapshots plus participant rollups for speaker engagement, speaking time, and interaction signals, with rule fallback for obvious cues. |
 | Persistent terminology glossary | `GlossaryStoreService`, `GlossaryService`, `/api/glossary/terms`, `MeetingProcessingSettings.tsx` | Saved glossary terms are stored in SQLite and automatically merged into live and upload meetings before per-meeting correction, summary, and analysis prompts run. |
 
 ## 3. Live Meeting Workflow
@@ -120,12 +120,12 @@ Speaker corrections are persisted through `PATCH /api/meetings/{meeting_id}/spea
 
 `GlossaryStoreService` uses the same local SQLite file to store global terminology terms. `GlossaryService.resolve_terms()` merges per-meeting terms, saved global terms, and `CUSTOM_GLOSSARY_TERMS` in that order, deduplicating by case-insensitive `term` and keeping the same 50-term processing limit.
 
-`AuditLogService` also uses the same SQLite file and creates an `audit_events` table for successful manual edits. Each event stores `scope`, `meeting_id`, `entity_type`, `entity_id`, `action`, `field_path`, JSON `before` / `after` snapshots, JSON `metadata`, and `created_at`. Meeting-scoped events cover title, summary, action item status, and speaker correction edits. Global events cover glossary term create/update/delete operations. The audit log intentionally does not record ASR/LLM generated content, upload worker state changes, or meeting deletion in v1.
+`AuditLogService` also uses the same SQLite file and creates an `audit_events` table for successful manual edits and deletions. Each event stores `scope`, `meeting_id`, `entity_type`, `entity_id`, `action`, `field_path`, JSON `before` / `after` snapshots, JSON `metadata`, and `created_at`. Meeting-scoped events cover title, favorite/archive/tag metadata, summary, action item status, speaker correction edits, and compact meeting deletion metadata. Global events cover glossary term create/update/delete operations. The audit log intentionally does not record ASR/LLM generated content or upload worker state changes in v1.
 
 Audit query APIs are read-only:
 
 - `GET /api/meetings/{meeting_id}/audit-events` returns recent events for a saved meeting, newest first.
-- `GET /api/audit-events?scope=global&entity_type=glossary_term` returns global glossary audit events for local troubleshooting and future UI use.
+- `GET /api/audit-events?scope=global&entity_type=glossary_term` returns filtered audit events for local troubleshooting and future UI use. The same endpoint accepts `meeting_id` to retrieve compact deletion records after the meeting row has been removed.
 
 Meeting notes can be exported from the summary panel as a Markdown file. The export is generated in the frontend from the displayed summary, meeting date, duration, risks, decisions, action items, and transcript references; no backend export endpoint is required.
 
@@ -181,10 +181,11 @@ Backend tests use pytest and must run through `backend/.venv`. Existing coverage
 - live WebSocket workflow
 - upload workflow
 - history persistence and migration
-- edit audit history persistence and query behavior
+- edit/delete audit history persistence and query behavior
+- raw audio retention filename hardening
 - demo provider health, WebSocket, upload, and disabled-mode behavior
 
-The frontend uses Vitest with React Testing Library for interaction coverage. Current frontend tests cover upload status messaging, ASR provider options, upload control state, summary editing, audit history rendering, Markdown meeting notes export, and export formatting. `npm run build` remains the primary bundle verification step.
+The frontend uses Vitest with React Testing Library for interaction coverage. Current frontend tests cover upload status messaging, ASR provider options, upload control state, summary editing, participant analysis rendering, meeting tag normalization, audit history rendering, Markdown meeting notes export, and export formatting. `npm run build` remains the primary bundle verification step.
 
 The Windows-first CI workflow installs backend and frontend dependencies, runs backend pytest, runs frontend tests, and builds the Vite frontend.
 
@@ -207,9 +208,9 @@ If PowerShell blocks `npm.ps1`, use `npm.cmd`. Electron does not need to be upgr
 - Live rolling summaries are provisional and not persisted; the final summary is still generated after finalize or upload completion.
 - Translation supports one target language per meeting.
 - Mobile background and lock-screen recording is still controlled by the operating system and browser; the frontend detects common interruptions but cannot guarantee capture while suspended.
-- Raw audio is not stored in meeting history.
+- User-requested raw upload audio is stored separately under `RAW_AUDIO_DIR`; meeting history exposes retention metadata but not filesystem paths or download APIs.
 - Upload processing uses a SQLite-backed persistent queue. FastAPI starts an embedded worker by default, and `tools/run_upload_worker.py` can process the same queue out of process. Upload jobs now have bounded retry, backoff, stale-claim recovery, and local diagnostics; external monitoring and alerting remain future work.
 - Upload retry is session-local in the frontend; after a page refresh, the user must select the audio file again.
-- Edit audit history is local and append-only; v1 has no account actor, retention policy, or version restore UI.
-- Sentiment and engagement analysis is meeting-level, not participant-level.
+- Edit/delete audit history is local and append-only; v1 has no account actor, retention policy, or version restore UI.
+- Participant-level sentiment and engagement analysis is a lightweight rollup over transcripts and explicit interaction signals; it is not a full behavioral or performance assessment.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.

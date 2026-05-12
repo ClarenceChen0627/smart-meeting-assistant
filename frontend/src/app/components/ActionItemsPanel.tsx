@@ -150,7 +150,7 @@ export function ActionItemsPanel({
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <p className="text-sm text-gray-500 mb-1">Total Action Items</p>
           <p className="text-gray-900">{items.length}</p>
@@ -173,13 +173,13 @@ export function ActionItemsPanel({
 
       {pendingItems.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
+          <div className="px-4 py-4 border-b border-gray-200 sm:px-6">
             <h2 className="text-gray-900">Pending Action Items</h2>
           </div>
 
           <div className="divide-y divide-gray-100">
             {pendingItems.map((item) => (
-              <div key={item.id} className="p-6 hover:bg-gray-50 transition-colors">
+              <div key={item.id} className="p-4 hover:bg-gray-50 transition-colors sm:p-6">
                 <div className="flex items-start gap-4">
                   <button
                     onClick={() => {
@@ -194,8 +194,8 @@ export function ActionItemsPanel({
                   </button>
 
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-4 mb-2">
-                      <h3 className="text-sm text-gray-900">{item.task}</h3>
+                    <div className="flex flex-col items-start justify-between gap-2 mb-2 sm:flex-row sm:gap-4">
+                      <h3 className="min-w-0 break-words text-sm text-gray-900">{item.task}</h3>
                       <span className={`px-2 py-1 rounded text-xs border ${priorityColors[item.priority]}`}>
                         {item.priority}
                       </span>
@@ -204,11 +204,11 @@ export function ActionItemsPanel({
                     <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 mb-3">
                       <div className="flex items-center gap-1.5">
                         <User className="w-4 h-4" />
-                        <span>{item.assignee}</span>
+                        <span className="break-words">{item.assignee}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Calendar className="w-4 h-4" />
-                        <span>{item.deadline}</span>
+                        <span className="break-words">{item.deadline}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Clock className="w-4 h-4" />
@@ -221,7 +221,7 @@ export function ActionItemsPanel({
 
                     <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
                       <p className="text-xs text-blue-600 mb-1">Extracted from transcript:</p>
-                      <p className="text-sm text-gray-700 italic">"{item.source_excerpt}"</p>
+                      <p className="break-words text-sm text-gray-700 italic">"{item.source_excerpt}"</p>
                     </div>
                   </div>
                 </div>
@@ -233,13 +233,13 @@ export function ActionItemsPanel({
 
       {completedItems.length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
+          <div className="px-4 py-4 border-b border-gray-200 sm:px-6">
             <h2 className="text-gray-900">Completed Action Items</h2>
           </div>
 
           <div className="divide-y divide-gray-100">
             {completedItems.map((item) => (
-              <div key={item.id} className="p-6 hover:bg-gray-50 transition-colors opacity-60">
+              <div key={item.id} className="p-4 hover:bg-gray-50 transition-colors opacity-60 sm:p-6">
                 <div className="flex items-start gap-4">
                   <button
                     onClick={() => {
@@ -254,8 +254,8 @@ export function ActionItemsPanel({
                   </button>
 
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-4 mb-2">
-                      <h3 className="text-sm text-gray-900 line-through">{item.task}</h3>
+                    <div className="flex flex-col items-start justify-between gap-2 mb-2 sm:flex-row sm:gap-4">
+                      <h3 className="min-w-0 break-words text-sm text-gray-900 line-through">{item.task}</h3>
                       <span className={`px-2 py-1 rounded text-xs border ${priorityColors[item.priority]}`}>
                         {item.priority}
                       </span>
@@ -264,11 +264,11 @@ export function ActionItemsPanel({
                     <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500">
                       <div className="flex items-center gap-1.5">
                         <User className="w-4 h-4" />
-                        <span>{item.assignee}</span>
+                        <span className="break-words">{item.assignee}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Calendar className="w-4 h-4" />
-                        <span>{item.deadline}</span>
+                        <span className="break-words">{item.deadline}</span>
                       </div>
                     </div>
                   </div>

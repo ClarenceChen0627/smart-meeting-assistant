@@ -660,6 +660,10 @@ def test_meeting_edit_endpoints_write_audit_events(tmp_path) -> None:
             "/api/meetings/meeting-audit/speakers",
             json={"speaker_updates": [{"from": "Speaker 1", "to": "Alice"}]},
         )
+        metadata_response = client.patch(
+            "/api/meetings/meeting-audit/metadata",
+            json={"favorite": True, "archived": False, "tags": ["Launch", "Launch", "Q2"]},
+        )
         audit_response = client.get("/api/meetings/meeting-audit/audit-events")
         missing_response = client.patch("/api/meetings/missing/title", json={"title": "Nope"})
 
@@ -667,6 +671,7 @@ def test_meeting_edit_endpoints_write_audit_events(tmp_path) -> None:
     assert summary_response.status_code == 200
     assert action_response.status_code == 200
     assert speaker_response.status_code == 200
+    assert metadata_response.status_code == 200
     assert missing_response.status_code == 404
     assert audit_response.status_code == 200
     events = audit_response.json()
@@ -676,7 +681,62 @@ def test_meeting_edit_endpoints_write_audit_events(tmp_path) -> None:
     assert title_event["after"] == "Renamed meeting"
     speaker_event = next(event for event in events if event["entity_type"] == "speaker")
     assert speaker_event["metadata"]["affected_transcript_count"] == 1
+    metadata_event = next(event for event in events if event["field_path"] == "metadata")
+    assert metadata_event["before"] == {"favorite": False, "archived": False, "tags": []}
+    assert metadata_event["after"] == {"favorite": True, "archived": False, "tags": ["Launch", "Q2"]}
+    assert metadata_event["metadata"]["updated_fields"] == ["archived", "favorite", "tags"]
     assert len(audit_service.list_events(meeting_id="missing")) == 0
+
+
+def test_delete_meeting_writes_compact_audit_event(tmp_path) -> None:
+    meeting_history_service = MeetingHistoryService(tmp_path / "meeting_history.sqlite3")
+    audit_service = AuditLogService(tmp_path / "meeting_history.sqlite3")
+    meeting_history_service.create_meeting(
+        meeting_id="meeting-delete",
+        scene="general",
+        target_lang=None,
+        provider="dashscope",
+    )
+    meeting_history_service.upsert_transcript(
+        "meeting-delete",
+        TranscriptItem(
+            transcript_index=0,
+            speaker="Speaker 1",
+            speaker_is_final=True,
+            transcript_is_final=True,
+            text="We can delete this test meeting.",
+            start=0,
+            end=1,
+        ),
+    )
+    meeting_history_service.update_title("meeting-delete", "Delete audit check")
+
+    app = FastAPI()
+    app.include_router(meetings_router)
+    app.include_router(audit_router)
+    app.state.meeting_history_service = meeting_history_service
+    app.state.audit_log_service = audit_service
+
+    with TestClient(app) as client:
+        delete_response = client.delete("/api/meetings/meeting-delete")
+        audit_response = client.get("/api/audit-events?meeting_id=meeting-delete")
+
+    assert delete_response.status_code == 204
+    assert audit_response.status_code == 200
+    events = audit_response.json()
+    assert len(events) == 1
+    delete_event = events[0]
+    assert delete_event["action"] == "delete"
+    assert delete_event["entity_type"] == "meeting"
+    assert delete_event["before"] == {
+        "title": "Delete audit check",
+        "status": "draft",
+        "source_type": "live",
+        "transcript_count": 1,
+        "raw_audio_retained": False,
+    }
+    assert delete_event["after"] is None
+    assert delete_event["metadata"] == {"manual": True}
 
 
 def test_transcribe_batch_returns_final_diarized_speakers() -> None:

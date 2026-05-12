@@ -8,7 +8,7 @@ interface ASRProviderControlsProps {
   onProviderChange: (provider: ASRProvider) => void;
 }
 
-const providers = asrProviderOptions as Array<{ code: ASRProvider; name: string; description: string; badge: string }>;
+const providers = asrProviderOptions;
 
 export function ASRProviderControls({ currentProvider, onProviderChange }: ASRProviderControlsProps) {
   const [isOpen, setIsOpen] = useState(false);

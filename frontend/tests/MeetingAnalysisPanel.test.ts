@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSentimentTrend } from '../src/app/components/MeetingAnalysisPanel';
+import { buildParticipantDetails, buildSentimentTrend } from '../src/app/components/MeetingAnalysisPanel';
 import type { MeetingAnalysis, TranscriptItem } from '../src/types';
 
 const analysis: MeetingAnalysis = {
@@ -49,5 +49,103 @@ describe('buildSentimentTrend', () => {
       })
     );
     expect(trend[2]).toEqual(expect.objectContaining({ time: 'End', positive: 100 }));
+  });
+});
+
+describe('buildParticipantDetails', () => {
+  it('uses backend participant rollups when available', () => {
+    const details = buildParticipantDetails(
+      {
+        ...analysis,
+        participants: [
+          {
+            speaker: 'Alice',
+            transcript_count: 4,
+            speaking_time_seconds: 72.4,
+            signal_counts: {
+              agreement: 2,
+              disagreement: 0,
+              tension: 0,
+              hesitation: 1,
+            },
+            sentiment: 'positive',
+            engagement_level: 'high',
+            engagement_summary: 'Alice led the launch alignment discussion.',
+          },
+        ],
+      },
+      transcripts
+    );
+
+    expect(details).toHaveLength(1);
+    expect(details[0]).toMatchObject({
+      name: 'Alice',
+      sentiment: 'positive',
+      engagementLevel: 'high',
+      engagementScore: 85,
+      transcriptCount: 4,
+      speakingTimeSeconds: 72.4,
+      signalTotal: 3,
+      signalSummary: '2 agreement, 1 hesitation',
+      summary: 'Alice led the launch alignment discussion.',
+    });
+  });
+
+  it('builds speaker-level fallback details from highlights and transcript timing', () => {
+    const details = buildParticipantDetails(
+      {
+        ...analysis,
+        highlights: [
+          {
+            transcript_index: 0,
+            signal: 'agreement',
+            severity: 'medium',
+            reason: 'Explicit agreement.',
+          },
+          {
+            transcript_index: 1,
+            signal: 'tension',
+            severity: 'high',
+            reason: 'Explicit risk.',
+          },
+        ],
+      },
+      [
+        {
+          ...transcripts[0],
+          speaker: 'Speaker 1',
+          start: 0,
+          end: 3.2,
+        },
+        {
+          ...transcripts[1],
+          speaker: 'Speaker 1',
+          start: 5,
+          end: 7.5,
+        },
+        {
+          ...transcripts[2],
+          speaker: 'Speaker 2',
+          start: 10,
+          end: 11,
+        },
+      ]
+    );
+
+    expect(details[0]).toMatchObject({
+      name: 'Speaker 1',
+      sentiment: 'mixed',
+      engagementLevel: 'high',
+      transcriptCount: 2,
+      speakingTimeSeconds: 5.7,
+      signalTotal: 2,
+      signalSummary: '1 agreement, 1 tension',
+    });
+    expect(details[1]).toMatchObject({
+      name: 'Speaker 2',
+      sentiment: 'neutral',
+      engagementLevel: 'medium',
+      signalSummary: 'No interaction signals',
+    });
   });
 });

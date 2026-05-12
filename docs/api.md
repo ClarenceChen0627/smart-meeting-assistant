@@ -158,7 +158,7 @@ Duplicate terms are rejected case-insensitively with `409 Conflict`. Per-meeting
 
 ## Audit Events
 
-Successful manual edits are recorded in the local SQLite database configured by `MEETING_HISTORY_DB_PATH`. The audit log covers meeting title edits, summary edits, action item status edits, speaker corrections, and global glossary term create/update/delete operations. It does not record ASR/LLM generated content, upload worker state transitions, or meeting deletion in v1.
+Successful manual edits and deletions are recorded in the local SQLite database configured by `MEETING_HISTORY_DB_PATH`. The audit log covers meeting title edits, meeting favorite/archive/tag metadata edits, summary edits, action item status edits, speaker corrections, meeting deletion metadata, and global glossary term create/update/delete operations. It does not record ASR/LLM generated content or upload worker state transitions in v1.
 
 `GET /api/meetings/{meeting_id}/audit-events`
 
@@ -188,7 +188,7 @@ Returns recent audit events for one meeting, ordered newest first. The optional 
 
 `GET /api/audit-events?scope=global&entity_type=glossary_term`
 
-Returns global audit events, primarily for local troubleshooting and future UI use. Global glossary events use `scope: "global"` and `meeting_id: null`.
+Returns audit events, primarily for local troubleshooting and future UI use. Optional filters are `scope`, `meeting_id`, and `entity_type`. Global glossary events use `scope: "global"` and `meeting_id: null`; deleted meeting records can still be found with `meeting_id`.
 
 ## Speaker Corrections
 

@@ -334,7 +334,7 @@ export function SummaryPanel({
               <h2 className="text-sm font-medium text-blue-900">Edit Summary</h2>
               <p className="text-xs text-blue-700">Changes are saved to this meeting record.</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={cancelEditing}
@@ -493,20 +493,20 @@ export function SummaryPanel({
         )}
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
         <div className="flex items-start gap-3 mb-4">
           <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
             <FileText className="w-5 h-5 text-blue-600" />
           </div>
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <h2 className="text-gray-900 mb-2">Meeting Overview</h2>
-            <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">
+            <p className="break-words text-sm text-gray-600 leading-relaxed whitespace-pre-line">
               {displayedOverview}
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-gray-100">
+        <div className="grid grid-cols-1 gap-4 mt-4 pt-4 border-t border-gray-100 sm:grid-cols-2">
           <div>
             <p className="text-xs text-gray-500 mb-1">Date</p>
             <p className="text-sm text-gray-900">{formatSessionDate(meetingDate)}</p>
@@ -518,7 +518,7 @@ export function SummaryPanel({
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
             <TrendingUp className="w-5 h-5 text-purple-600" />
@@ -532,13 +532,13 @@ export function SummaryPanel({
               <div className="w-6 h-6 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center flex-shrink-0 text-xs">
                 {index + 1}
               </div>
-              <p className="text-sm text-gray-700 flex-1">{topic}</p>
+              <p className="min-w-0 flex-1 break-words text-sm text-gray-700">{topic}</p>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
             <Target className="w-5 h-5 text-green-600" />
@@ -554,14 +554,14 @@ export function SummaryPanel({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <p className="text-sm text-gray-700 flex-1">{decision}</p>
+              <p className="min-w-0 flex-1 break-words text-sm text-gray-700">{decision}</p>
             </div>
           ))}
         </div>
       </div>
 
       {displayedRisks.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
               <Target className="w-5 h-5 text-red-600" />
@@ -571,7 +571,7 @@ export function SummaryPanel({
 
           <div className="space-y-2">
             {displayedRisks.map((risk, index) => (
-              <div key={index} className="rounded-lg border border-red-100 bg-red-50 p-3 text-sm text-gray-700">
+              <div key={index} className="break-words rounded-lg border border-red-100 bg-red-50 p-3 text-sm text-gray-700">
                 {risk}
               </div>
             ))}
@@ -579,7 +579,7 @@ export function SummaryPanel({
         </div>
       )}
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
             <CheckCircle2 className="w-5 h-5 text-amber-600" />
@@ -591,8 +591,8 @@ export function SummaryPanel({
           <div className="space-y-3">
             {displayedActionItems.map((item, index) => (
               <div key={index} className="p-4 rounded-lg border border-amber-100 bg-amber-50">
-                <div className="flex items-start justify-between gap-4">
-                  <p className="text-sm text-gray-900 flex-1">{item.task}</p>
+                <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:gap-4">
+                  <p className="min-w-0 flex-1 break-words text-sm text-gray-900">{item.task}</p>
                   <span className="px-2 py-1 rounded text-xs bg-white text-amber-700 border border-amber-200">
                     {item.status}
                   </span>

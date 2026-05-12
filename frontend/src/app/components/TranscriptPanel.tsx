@@ -153,15 +153,15 @@ export function TranscriptPanel({
   return (
     <div className="bg-white rounded-lg border border-gray-200">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <div>
+      <div className="px-4 py-4 border-b border-gray-200 sm:px-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <h2 className="text-gray-900">{title}</h2>
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="mt-1 break-words text-sm text-gray-500">
               {description}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             {canShowSpeakerEditor && !isEditingSpeakers && (
               <button
                 type="button"
@@ -204,7 +204,7 @@ export function TranscriptPanel({
             {speakerError && (
               <p className="mt-2 text-xs text-red-600">{speakerError}</p>
             )}
-            <div className="mt-3 flex justify-end gap-2">
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={cancelSpeakerEditing}
@@ -231,7 +231,7 @@ export function TranscriptPanel({
       </div>
 
       {/* Transcript Content */}
-      <div className="p-6 space-y-4 max-h-[600px] overflow-y-auto">
+      <div className="space-y-4 max-h-[600px] overflow-y-auto p-4 sm:p-6">
         {safeTranscripts.map((entry) => (
           <div key={entry.id} className="flex gap-4">
             {/* Speaker Avatar */}
@@ -241,8 +241,8 @@ export function TranscriptPanel({
 
             {/* Message Content */}
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`text-sm ${entry.speaker_is_final ? 'text-gray-900' : 'text-gray-500'}`}>
+              <div className="flex flex-wrap items-center gap-2 mb-1">
+                <span className={`break-words text-sm ${entry.speaker_is_final ? 'text-gray-900' : 'text-gray-500'}`}>
                   {entry.speaker}
                 </span>
                 {!entry.speaker_is_final && (
@@ -273,21 +273,21 @@ export function TranscriptPanel({
               </div>
 
               <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                <p className={`text-sm leading-relaxed ${entry.transcript_is_final ? 'text-gray-700' : 'text-gray-500 italic'}`}>
+                <p className={`break-words text-sm leading-relaxed ${entry.transcript_is_final ? 'text-gray-700' : 'text-gray-500 italic'}`}>
                   {entry.text}
                 </p>
 
                 {showTranslation && entry.translatedText && (
                   <div className="mt-2 pt-2 border-t border-gray-200">
                     <p className="text-xs text-gray-500 mb-1">Translation ({entry.translatedTargetLang?.toUpperCase() || currentLanguage.toUpperCase()}):</p>
-                    <p className="text-sm text-gray-600 italic leading-relaxed">{entry.translatedText}</p>
+                    <p className="break-words text-sm text-gray-600 italic leading-relaxed">{entry.translatedText}</p>
                   </div>
                 )}
                 
                 {entry.analysisReason && (
                    <div className="mt-2 pt-2 border-t border-gray-200">
                      <p className="text-xs text-gray-500 mb-1">AI Reason:</p>
-                     <p className="text-xs text-indigo-600 italic leading-relaxed">{entry.analysisReason}</p>
+                     <p className="break-words text-xs text-indigo-600 italic leading-relaxed">{entry.analysisReason}</p>
                    </div>
                 )}
               </div>
@@ -304,8 +304,8 @@ export function TranscriptPanel({
       </div>
 
       {/* Footer Stats */}
-      <div className="px-6 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-        <div className="flex items-center justify-between text-sm text-gray-600">
+      <div className="px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-lg sm:px-6">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-600">
           <span>{safeTranscripts.length} messages transcribed</span>
           <span>{uniqueSpeakers} speakers identified</span>
         </div>

@@ -27,7 +27,7 @@ The project now satisfies all five baseline requirements and extends them with l
 - SQLite meeting history for live and uploaded meetings.
 - Upload meeting workflow with progressive transcript, translation, analysis, and summary results.
 - Editable saved titles, summary fields, and action item status/content.
-- Local edit audit history for successful title, summary, action item, speaker, and glossary changes.
+- Local edit/delete audit history for successful title, meeting metadata, summary, action item, speaker, meeting deletion, and glossary changes.
 - `DEMO_MODE=1` + `provider=demo` for ASR, translation, summary, analysis, upload, and history without external API keys.
 - `GET /api/health` reports `demoMode`, available ASR providers, and provider configuration status.
 - Windows-first Electron shell.
@@ -38,12 +38,12 @@ The project now satisfies all five baseline requirements and extends them with l
 
 - Live rolling summaries are provisional and not persisted; the saved final summary is generated after finalize or upload completion.
 - Translation supports one target language per meeting.
-- Raw audio files are not stored in meeting history.
+- User-requested raw upload audio is stored separately under `RAW_AUDIO_DIR`; meeting history exposes retention metadata but not filesystem paths or download APIs.
 - Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs have bounded retry, backoff, stale recovery, and local diagnostics; external monitoring and alerting are still future work.
-- Edit audit history is local and append-only; account actors, retention policy, and version restore UI are not implemented.
-- Sentiment and engagement analysis is meeting-level, not participant-level.
+- Edit/delete audit history is local and append-only; account actors, retention policy, and version restore UI are not implemented.
+- Participant-level sentiment and engagement analysis is a lightweight rollup over transcripts and explicit interaction signals; it is not a full behavioral or performance assessment.
 - Demo mode is for onboarding, local smoke tests, and CI. It does not represent real provider quality.
 
 ## Recommendation
 
-Future work should focus on real-meeting ASR accuracy, terminology handling, external monitoring and alerting, participant-level analysis, multi-target translation, and deeper audit governance such as actors, retention, and restore workflows.
+Future work should focus on real-meeting ASR accuracy, terminology handling, external monitoring and alerting, richer participant analytics, multi-target translation, and deeper audit governance such as actors, retention, and restore workflows.
