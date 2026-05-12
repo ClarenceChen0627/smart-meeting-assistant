@@ -6,6 +6,7 @@ import { ASRProviderControls } from './components/ASRProviderControls';
 import { AuditTrailPanel } from './components/AuditTrailPanel';
 import { MeetingAnalysisPanel } from './components/MeetingAnalysisPanel';
 import { MeetingHistorySheet } from './components/MeetingHistorySheet';
+import { MeetingMemoryPanel } from './components/MeetingMemoryPanel';
 import { MeetingProcessingSettings } from './components/MeetingProcessingSettings';
 import { SceneControls } from './components/SceneControls';
 import { SummaryPanel } from './components/SummaryPanel';
@@ -24,6 +25,7 @@ import type {
   GlossaryTermRecord,
   GlossaryTermUpdate,
   MeetingAnalysis,
+  MeetingMemoryOverview,
   MeetingHistoryListItem,
   MeetingHistoryTranscriptItem,
   MeetingRecord,
@@ -35,7 +37,7 @@ import type {
   TranslationTargetLanguage,
 } from '../types';
 
-type InputMode = 'live' | 'upload';
+type InputMode = 'live' | 'upload' | 'memory';
 type WorkspaceTab = 'transcript' | 'summary' | 'actions' | 'analysis' | 'audit';
 
 interface DisplayTranscriptItem extends TranscriptItem {
@@ -167,6 +169,10 @@ export default function App() {
   const [historyList, setHistoryList] = useState<MeetingHistoryListItem[]>([]);
   const [historyMeeting, setHistoryMeeting] = useState<MeetingRecord | null>(null);
   const [activeUploadMeeting, setActiveUploadMeeting] = useState<MeetingRecord | null>(null);
+  const [memoryOverview, setMemoryOverview] = useState<MeetingMemoryOverview | null>(null);
+  const [memoryCollectionId, setMemoryCollectionId] = useState('all');
+  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
+  const [memoryError, setMemoryError] = useState('');
   const [isHistorySheetOpen, setIsHistorySheetOpen] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [loadingMeetingId, setLoadingMeetingId] = useState<string | null>(null);
@@ -205,6 +211,38 @@ export default function App() {
       setServerError(error instanceof Error ? error.message : 'Failed to load meeting history');
     } finally {
       setIsHistoryLoading(false);
+    }
+  };
+
+  const loadMemoryOverview = async (collectionId = memoryCollectionId) => {
+    try {
+      setIsMemoryLoading(true);
+      setMemoryError('');
+      const params = new URLSearchParams();
+      if (collectionId && collectionId !== 'all') {
+        params.set('collection_id', collectionId);
+      }
+      const query = params.toString();
+      const response = await apiFetch(`${buildApiBaseUrl()}/api/memory${query ? `?${query}` : ''}`);
+      if (!response.ok) {
+        if (response.status === 404 && collectionId !== 'all') {
+          setMemoryCollectionId('all');
+          await loadMemoryOverview('all');
+          return;
+        }
+        throw new Error(`Failed to load meeting memory (${response.status})`);
+      }
+      const payload = await response.json() as MeetingMemoryOverview;
+      setMemoryOverview(payload);
+      setMemoryCollectionId(payload.collection_id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load meeting memory';
+      setMemoryError(message);
+      if (!memoryOverview) {
+        setServerError(message);
+      }
+    } finally {
+      setIsMemoryLoading(false);
     }
   };
 
@@ -354,6 +392,7 @@ export default function App() {
 
   useEffect(() => {
     void loadHistoryList();
+    void loadMemoryOverview('all');
     void loadGlobalGlossaryTerms();
   }, []);
 
@@ -457,6 +496,7 @@ export default function App() {
       setSummary(data);
       setIsRollingSummary(false);
       void loadHistoryList();
+      void loadMemoryOverview(memoryCollectionId);
     },
     onError: (message) => {
       setServerError(message);
@@ -502,6 +542,9 @@ export default function App() {
     setHistoryMeeting(null);
     setAuditEvents([]);
     setAuditError('');
+    if (mode === 'memory') {
+      void loadMemoryOverview(memoryCollectionId);
+    }
   };
 
   const handleUploadFileChange = (file: File | null) => {
@@ -614,6 +657,7 @@ export default function App() {
       const payload = await response.json() as MeetingRecord;
       setActiveUploadMeeting(payload);
       updateHistoryFromMeeting(payload);
+      void loadMemoryOverview(memoryCollectionId);
       setRetryUploadFile(uploadFile);
       setSelectedUploadFile(null);
       setUploadInputKey((prev) => prev + 1);
@@ -639,6 +683,12 @@ export default function App() {
     } finally {
       setLoadingMeetingId(null);
     }
+  };
+
+  const handleOpenMemoryMeeting = async (meetingId: string) => {
+    await handleSelectHistoryMeeting(meetingId);
+    setInputMode('live');
+    setActiveTab('summary');
   };
 
   const handleDeleteHistoryMeeting = async (meetingId: string) => {
@@ -669,6 +719,7 @@ export default function App() {
         setStatusMessage('Ready to start meeting');
         setActiveTab('transcript');
       }
+      void loadMemoryOverview(memoryCollectionId);
     } catch (error) {
       setServerError(error instanceof Error ? error.message : 'Failed to delete meeting record');
     } finally {
@@ -676,15 +727,11 @@ export default function App() {
     }
   };
 
-  const handleActionItemStatusChange = async (
+  const updateActionItemStatusForMeeting = async (
+    meetingId: string,
     actionItemIndex: number,
     status: ActionItemStatus
   ) => {
-    const meetingId = displayedMeeting?.meeting_id ?? currentMeetingId;
-    if (!meetingId) {
-      return;
-    }
-
     const response = await apiFetch(`${buildApiBaseUrl()}/api/meetings/${meetingId}/action-items/${actionItemIndex}`, {
       method: 'PATCH',
       headers: {
@@ -721,6 +768,29 @@ export default function App() {
     if (currentMeetingId === payload.meeting_id) {
       setSummary(payload.summary);
     }
+    void loadMemoryOverview(memoryCollectionId);
+
+    return payload;
+  };
+
+  const handleActionItemStatusChange = async (
+    actionItemIndex: number,
+    status: ActionItemStatus
+  ) => {
+    const meetingId = displayedMeeting?.meeting_id ?? currentMeetingId;
+    if (!meetingId) {
+      return;
+    }
+
+    await updateActionItemStatusForMeeting(meetingId, actionItemIndex, status);
+  };
+
+  const handleMemoryActionItemStatusChange = async (
+    meetingId: string,
+    actionItemIndex: number,
+    status: ActionItemStatus
+  ) => {
+    await updateActionItemStatusForMeeting(meetingId, actionItemIndex, status);
   };
 
   const handleRenameMeeting = async (meetingId: string, title: string) => {
@@ -756,6 +826,7 @@ export default function App() {
     if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
       setActiveUploadMeeting(payload);
     }
+    void loadMemoryOverview(memoryCollectionId);
   };
 
   const handleUpdateMeetingMetadata = async (
@@ -794,6 +865,7 @@ export default function App() {
     if (activeUploadMeeting?.meeting_id === payload.meeting_id) {
       setActiveUploadMeeting(payload);
     }
+    void loadMemoryOverview(memoryCollectionId);
   };
 
   const handleSummarySave = async (meetingId: string, nextSummary: MeetingSummaryUpdate) => {
@@ -836,6 +908,7 @@ export default function App() {
       if (currentMeetingId === payload.meeting_id) {
         setSummary(payload.summary);
       }
+      void loadMemoryOverview(memoryCollectionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update meeting summary';
       setServerError(message);
@@ -945,6 +1018,8 @@ export default function App() {
 
   const displayStatusMessage = isHistoryView
     ? `Viewing saved ${sourceLabels[historyMeeting.source_type]} meeting record`
+    : inputMode === 'memory'
+      ? 'Tracking cross-meeting decisions, actions, risks, and next-meeting prep'
     : inputMode === 'upload'
       ? buildUploadStatusMessage(activeUploadMeeting, isUploadingFile)
       : statusMessage;
@@ -986,6 +1061,18 @@ export default function App() {
                 } ${!canSwitchInputMode ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 Upload
+              </button>
+              <button
+                type="button"
+                onClick={() => handleInputModeChange('memory')}
+                disabled={!canSwitchInputMode}
+                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                  inputMode === 'memory'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                } ${!canSwitchInputMode ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                Memory
               </button>
             </div>
 
@@ -1029,87 +1116,91 @@ export default function App() {
               <span>Access Token</span>
             </button>
 
-            <ASRProviderControls
-              currentProvider={currentProvider}
-              onProviderChange={setCurrentProvider}
-            />
-            <SceneControls
-              currentScene={currentScene}
-              onSceneChange={setCurrentScene}
-            />
-            <TranslationControls
-              currentLanguage={currentLanguage}
-              onLanguageChange={(lang) => setCurrentLanguage(lang as TranslationTargetLanguage)}
-            />
-            <MeetingProcessingSettings
-              glossaryTerms={glossaryTerms}
-              disabled={isRecording || isStarting || isFinalizing || isUploadingFile}
-              onGlossaryTermsChange={setGlossaryTerms}
-              globalGlossaryTerms={globalGlossaryTerms}
-              isGlossaryLoading={isGlossaryLoading}
-              glossaryError={glossaryError}
-              onCreateGlobalTerm={handleCreateGlobalGlossaryTerm}
-              onUpdateGlobalTerm={handleUpdateGlobalGlossaryTerm}
-              onDeleteGlobalTerm={handleDeleteGlobalGlossaryTerm}
-            />
-
-            {inputMode === 'live' ? (
+            {inputMode !== 'memory' && (
               <>
-                <button
-                  onClick={() => setIsMuted(!isMuted)}
-                  disabled={!isRecording}
-                  className={`p-3 rounded-lg transition-colors ${
-                    !isRecording ? 'opacity-50 cursor-not-allowed bg-gray-100' :
-                    isMuted
-                      ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  title={isMuted ? 'Unmute' : 'Mute'}
-                >
-                  {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                </button>
+                <ASRProviderControls
+                  currentProvider={currentProvider}
+                  onProviderChange={setCurrentProvider}
+                />
+                <SceneControls
+                  currentScene={currentScene}
+                  onSceneChange={setCurrentScene}
+                />
+                <TranslationControls
+                  currentLanguage={currentLanguage}
+                  onLanguageChange={(lang) => setCurrentLanguage(lang as TranslationTargetLanguage)}
+                />
+                <MeetingProcessingSettings
+                  glossaryTerms={glossaryTerms}
+                  disabled={isRecording || isStarting || isFinalizing || isUploadingFile}
+                  onGlossaryTermsChange={setGlossaryTerms}
+                  globalGlossaryTerms={globalGlossaryTerms}
+                  isGlossaryLoading={isGlossaryLoading}
+                  glossaryError={glossaryError}
+                  onCreateGlobalTerm={handleCreateGlobalGlossaryTerm}
+                  onUpdateGlobalTerm={handleUpdateGlobalGlossaryTerm}
+                  onDeleteGlobalTerm={handleDeleteGlobalGlossaryTerm}
+                />
 
-                <button
-                  onClick={toggleRecording}
-                  disabled={isStarting || isFinalizing}
-                  className={`flex flex-1 sm:flex-none items-center gap-2 px-5 sm:px-6 py-3 rounded-lg transition-colors min-w-[160px] sm:min-w-[200px] justify-center ${
-                    isStarting || isFinalizing ? 'bg-gray-400 text-white cursor-wait' :
-                    isRecording
-                      ? 'bg-red-600 text-white hover:bg-red-700'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
-                  }`}
-                >
-                  {isStarting ? (
-                    <span>Starting...</span>
-                  ) : isFinalizing ? (
-                    <span>Generating Summary...</span>
-                  ) : isRecording ? (
-                    <>
-                      <Pause className="w-5 h-5" />
-                      <span>Stop Recording</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-5 h-5" />
-                      <span>Start Recording</span>
-                    </>
-                  )}
-                </button>
+                {inputMode === 'live' ? (
+                  <>
+                    <button
+                      onClick={() => setIsMuted(!isMuted)}
+                      disabled={!isRecording}
+                      className={`p-3 rounded-lg transition-colors ${
+                        !isRecording ? 'opacity-50 cursor-not-allowed bg-gray-100' :
+                        isMuted
+                          ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                      title={isMuted ? 'Unmute' : 'Mute'}
+                    >
+                      {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    </button>
+
+                    <button
+                      onClick={toggleRecording}
+                      disabled={isStarting || isFinalizing}
+                      className={`flex flex-1 sm:flex-none items-center gap-2 px-5 sm:px-6 py-3 rounded-lg transition-colors min-w-[160px] sm:min-w-[200px] justify-center ${
+                        isStarting || isFinalizing ? 'bg-gray-400 text-white cursor-wait' :
+                        isRecording
+                          ? 'bg-red-600 text-white hover:bg-red-700'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {isStarting ? (
+                        <span>Starting...</span>
+                      ) : isFinalizing ? (
+                        <span>Generating Summary...</span>
+                      ) : isRecording ? (
+                        <>
+                          <Pause className="w-5 h-5" />
+                          <span>Stop Recording</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-5 h-5" />
+                          <span>Start Recording</span>
+                        </>
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  <UploadMeetingControls
+                    inputKey={uploadInputKey}
+                    selectedFileName={uploadControlFileName}
+                    isUploading={isUploadingFile}
+                    disabled={isRecording || isStarting || isFinalizing}
+                    isRetryAvailable={canRetryUpload}
+                    retainRawAudio={retainRawAudio}
+                    onRetainRawAudioChange={setRetainRawAudio}
+                    onFileChange={handleUploadFileChange}
+                    onUpload={() => {
+                      void handleUploadMeeting();
+                    }}
+                  />
+                )}
               </>
-            ) : (
-              <UploadMeetingControls
-                inputKey={uploadInputKey}
-                selectedFileName={uploadControlFileName}
-                isUploading={isUploadingFile}
-                disabled={isRecording || isStarting || isFinalizing}
-                isRetryAvailable={canRetryUpload}
-                retainRawAudio={retainRawAudio}
-                onRetainRawAudioChange={setRetainRawAudio}
-                onFileChange={handleUploadFileChange}
-                onUpload={() => {
-                  void handleUploadMeeting();
-                }}
-              />
             )}
           </div>
         </div>
@@ -1136,29 +1227,52 @@ export default function App() {
         }}
       />
 
-      <div className="min-w-0 overflow-x-auto bg-white border-b border-gray-200 px-4 sm:px-6">
-        <div className="flex w-max gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`relative shrink-0 whitespace-nowrap px-4 py-3 text-sm transition-colors sm:px-6 ${
-                activeTab === tab.id
-                  ? 'text-blue-600'
-                  : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              {tab.label}
-              {activeTab === tab.id && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
-              )}
-            </button>
-          ))}
+      {inputMode !== 'memory' && (
+        <div className="min-w-0 overflow-x-auto bg-white border-b border-gray-200 px-4 sm:px-6">
+          <div className="flex w-max gap-1">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`relative shrink-0 whitespace-nowrap px-4 py-3 text-sm transition-colors sm:px-6 ${
+                  activeTab === tab.id
+                    ? 'text-blue-600'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {tab.label}
+                {activeTab === tab.id && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="flex-1 overflow-auto">
         <div className="p-6 space-y-4">
+          {inputMode === 'memory' ? (
+            <MeetingMemoryPanel
+              overview={memoryOverview}
+              selectedCollectionId={memoryCollectionId}
+              isLoading={isMemoryLoading}
+              error={memoryError}
+              onCollectionChange={(collectionId) => {
+                setMemoryCollectionId(collectionId);
+                void loadMemoryOverview(collectionId);
+              }}
+              onRefresh={() => {
+                void loadMemoryOverview(memoryCollectionId);
+              }}
+              onOpenMeeting={(meetingId) => {
+                void handleOpenMemoryMeeting(meetingId);
+              }}
+              onActionStatusChange={handleMemoryActionItemStatusChange}
+              onActionStatusChangeError={setServerError}
+            />
+          ) : (
+            <>
           {isHistoryView && historyMeeting && (
             <div className="max-w-7xl mx-auto rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -1302,6 +1416,8 @@ export default function App() {
               isLoading={isAuditLoading}
               error={auditError}
             />
+          )}
+            </>
           )}
         </div>
       </div>

@@ -6,6 +6,8 @@ Language:
 
 Smart Meeting Assistant has a React/Vite frontend, a FastAPI backend, provider clients for ASR and LLM workflows, and SQLite-backed meeting history.
 
+The Memory workspace is a read-only aggregation layer over saved meeting history. It derives project/tag collections, cross-meeting action items, decision logs, risks, open questions, and next-meeting briefs from existing `summary_json`, transcript rows, tags, and meeting metadata.
+
 ## System Overview
 
 ```mermaid
@@ -97,4 +99,5 @@ stateDiagram-v2
 - `backend/app/services/asr_provider_service.py` chooses the active ASR provider and fallback order.
 - `backend/app/services/session_manager.py` owns live WebSocket session state and persistence.
 - `backend/app/services/upload_meeting_service.py` owns uploaded-audio processing.
+- `backend/app/services/meeting_memory_service.py` owns cross-meeting memory aggregation.
 - `frontend/src/app/` owns the main workspace and meeting panels.

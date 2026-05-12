@@ -105,6 +105,7 @@ Every HTTP response includes an `X-Request-ID` header. Clients may send the same
 - `POST /api/glossary/terms`
 - `PATCH /api/glossary/terms/{term_id}`
 - `DELETE /api/glossary/terms/{term_id}`
+- `GET /api/memory?collection_id=&archived=`
 - `GET /api/audit-events`
 - `GET /api/meetings?q=&status=&source_type=&provider=&scene=&favorite=&archived=&tag=`
 - `GET /api/meetings/{meeting_id}`
@@ -155,6 +156,54 @@ Returns saved terms:
 `PATCH /api/glossary/terms/{term_id}` accepts any subset of `term`, `replacement`, and `note`. `DELETE /api/glossary/terms/{term_id}` removes a saved term.
 
 Duplicate terms are rejected case-insensitively with `409 Conflict`. Per-meeting terms take precedence when a saved term uses the same `term`.
+
+## Meeting Memory
+
+`GET /api/memory`
+
+Returns a read-only cross-meeting memory view derived from saved SQLite meeting history. The default response uses active, non-archived meetings. Collections are derived from existing meeting tags and scenes; tag collections act as lightweight project views without requiring accounts or team workspaces.
+
+Optional query parameters:
+
+- `collection_id`: `all`, `tag:<tag name>`, or `scene:<scene>`.
+- `archived`: defaults to `false`; set `true` to build memory from archived meetings.
+
+The response includes collection summaries, cross-meeting action items, decisions, risks, open questions, and a deterministic next-meeting brief.
+
+```json
+{
+  "collection_id": "tag:Launch",
+  "stats": {
+    "meeting_count": 2,
+    "open_action_count": 1,
+    "completed_action_count": 1,
+    "decision_count": 2,
+    "risk_count": 1,
+    "open_question_count": 1
+  },
+  "action_items": [
+    {
+      "id": "meeting-1:action:0",
+      "action_item_index": 0,
+      "task": "Send the final launch checklist",
+      "assignee": "Speaker 1",
+      "deadline": "Friday",
+      "status": "pending",
+      "source": {
+        "meeting_id": "meeting-1",
+        "title": "Launch Readiness",
+        "transcript_index": 2,
+        "source_excerpt": "I will send the final checklist by Friday."
+      }
+    }
+  ],
+  "next_meeting_brief": {
+    "collection_name": "Launch",
+    "recap": "Launch has 2 active meetings, 1 pending action items, 2 decisions, 1 risks, and 1 open questions.",
+    "agenda": ["Confirm progress: Send the final launch checklist"]
+  }
+}
+```
 
 ## Audit Events
 

@@ -6,6 +6,8 @@ Language:
 
 Smart Meeting Assistant is a React 18 + FastAPI meeting copilot for live transcription, transcript translation, meeting summaries, action items, sentiment / engagement analysis, upload processing, and saved meeting history. The frontend runs in a browser or in a Windows-first Electron desktop shell.
 
+The product now also includes a cross-meeting Memory workspace that turns saved meetings into project-level execution memory: project/tag collections, action item rollups, decision logs, risk and open-question tracking, and next-meeting preparation briefs.
+
 ## Quick Start
 
 ### 1. Run without external AI keys
@@ -83,6 +85,7 @@ Use [Configuration](docs/configuration.md) for the minimal variable matrix and d
 - Upload meeting mode with background worker processing and progressive polling.
 - SQLite-backed meeting history for live and uploaded meetings.
 - Optional per-upload raw audio retention with saved meeting metadata.
+- Cross-meeting Memory workspace with project/tag collections, action item center, decision log, risk tracker, open-question tracker, and next-meeting brief.
 - Participant-level analysis rollups for speaker engagement and interaction signals.
 - Persistent custom terminology glossary support for live and uploaded meetings.
 - Editable saved titles, speaker labels, summary fields, and action item status.
@@ -128,6 +131,7 @@ cd frontend
 npm install
 npm run test
 npm run build
+npm run smoke:memory-browser
 npm run dev
 ```
 
@@ -136,6 +140,7 @@ cd frontend
 npm install
 npm run test
 npm run build
+npm run smoke:memory-browser
 npm run dev
 ```
 
@@ -203,7 +208,7 @@ docker-compose up --build
 
 - Quality-first roadmap: complete. Real-meeting upload quality evaluation, glossary correction, speaker edits, mobile reliability, rolling summaries, provider quality/cost evaluation, persistent upload queues, task recovery, local observability, and edit/delete audit history are implemented.
 - Launch-readiness roadmap: complete on `main`. Deployment/configuration docs, config checks, optional token protection, upload guardrails, meeting asset management, Markdown delivery exports, and release-readiness docs are implemented.
-- Next candidates: multi-user accounts and roles, team-owned meetings/glossaries/provider settings, external monitoring and alerting, retention/version restore governance, and optional Word/PDF export.
+- Next candidates: multi-user accounts and roles, team-owned meetings/glossaries/provider settings, external monitoring and alerting, retention/version restore governance, richer memory extraction, and optional Word/PDF export.
 
 ## License
 
