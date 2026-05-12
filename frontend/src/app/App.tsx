@@ -1136,13 +1136,13 @@ export default function App() {
         }}
       />
 
-      <div className="bg-white border-b border-gray-200 px-6">
-        <div className="flex gap-1">
+      <div className="min-w-0 overflow-x-auto bg-white border-b border-gray-200 px-4 sm:px-6">
+        <div className="flex w-max gap-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-6 py-3 text-sm transition-colors relative ${
+              className={`relative shrink-0 whitespace-nowrap px-4 py-3 text-sm transition-colors sm:px-6 ${
                 activeTab === tab.id
                   ? 'text-blue-600'
                   : 'text-gray-600 hover:text-gray-900'

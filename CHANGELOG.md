@@ -14,5 +14,6 @@
 - Hardened raw upload audio retention filenames for Windows reserved names and long sanitized filenames.
 - Added compact audit events for meeting deletion and a `meeting_id` filter on the audit event API.
 - Improved responsive layouts for analysis, action items, and meeting history panels on narrow screens.
+- Fixed workspace tab overflow on narrow screens when the audit tab is visible.
 - Normalized prompted meeting tags on the frontend to match backend limits before saving.
 - Added audit events for meeting favorite, archive, and tag metadata updates.
