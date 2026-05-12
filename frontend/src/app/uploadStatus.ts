@@ -1,11 +1,22 @@
-export const processingStageLabels = {
+import type { MeetingHistoryStatus, MeetingProcessingStage } from '../types';
+
+interface UploadStatusMeeting {
+  status: MeetingHistoryStatus;
+  processing_stage?: MeetingProcessingStage | null;
+  error_message?: string | null;
+}
+
+export const processingStageLabels: Record<MeetingProcessingStage, string> = {
   transcribing: 'Transcribing uploaded audio',
   translating: 'Generating transcript translations',
   analyzing: 'Analyzing meeting dynamics',
   summarizing: 'Generating meeting summary',
 };
 
-export const buildUploadStatusMessage = (meeting, isUploadingFile) => {
+export const buildUploadStatusMessage = (
+  meeting: UploadStatusMeeting | null,
+  isUploadingFile: boolean
+): string => {
   if (isUploadingFile) {
     return 'Uploading audio file...';
   }

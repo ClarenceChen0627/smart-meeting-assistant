@@ -194,15 +194,15 @@ docker-compose up --build
 - Realtime ASR can still misrecognize technical terms before glossary correction runs.
 - Mobile background and lock-screen recording remains limited by the operating system and browser; the frontend detects common interruptions and warns the user.
 - Upload processing uses a SQLite-backed persistent queue with an embedded worker by default. Jobs now have bounded retry, backoff, stale recovery, and local diagnostics; external monitoring and alerting are still future work.
-- Edit audit history is stored locally for successful manual edits; account actors, retention policy, and version restore remain future governance work.
+- Edit/delete audit history is stored locally for successful manual changes; account actors, retention policy, and version restore remain future governance work.
 - Self-hosted token protection is a basic private deployment guard, not a multi-user account or role system.
 - WebSocket token authentication uses a query parameter, so production proxies should avoid retaining query strings in access logs.
 - Export delivery is Markdown-first; Word and PDF generation are not included in this release.
 
 ## Roadmap
 
-- Quality-first roadmap: complete. Real-meeting upload quality evaluation, glossary correction, speaker edits, mobile reliability, rolling summaries, provider quality/cost evaluation, persistent upload queues, task recovery, local observability, and edit audit history are implemented.
-- Launch-readiness roadmap: complete on the current feature branch. Deployment/configuration docs, config checks, optional token protection, upload guardrails, meeting asset management, Markdown delivery exports, and release-readiness docs are implemented.
+- Quality-first roadmap: complete. Real-meeting upload quality evaluation, glossary correction, speaker edits, mobile reliability, rolling summaries, provider quality/cost evaluation, persistent upload queues, task recovery, local observability, and edit/delete audit history are implemented.
+- Launch-readiness roadmap: complete on `main`. Deployment/configuration docs, config checks, optional token protection, upload guardrails, meeting asset management, Markdown delivery exports, and release-readiness docs are implemented.
 - Next candidates: multi-user accounts and roles, team-owned meetings/glossaries/provider settings, external monitoring and alerting, retention/version restore governance, and optional Word/PDF export.
 
 ## License

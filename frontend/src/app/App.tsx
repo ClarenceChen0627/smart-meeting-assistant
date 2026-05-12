@@ -788,6 +788,7 @@ export default function App() {
 
     if (historyMeeting?.meeting_id === payload.meeting_id) {
       setHistoryMeeting(payload);
+      refreshSelectedAuditEvents(payload.meeting_id);
     }
 
     if (activeUploadMeeting?.meeting_id === payload.meeting_id) {

@@ -20,11 +20,13 @@ async def list_meeting_audit_events(
 async def list_audit_events(
     request: Request,
     scope: str | None = Query(None),
+    meeting_id: str | None = Query(None),
     entity_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
 ) -> list[AuditEventRecord]:
     return request.app.state.audit_log_service.list_events(
         scope=scope,
+        meeting_id=meeting_id,
         entity_type=entity_type,
         limit=limit,
     )

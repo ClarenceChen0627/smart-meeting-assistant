@@ -1,11 +1,13 @@
+import { useMemo } from 'react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, AlertCircle, Smile, Meh, Frown } from 'lucide-react';
-import type { MeetingAnalysis, MeetingSignalCounts, MeetingSignalType } from '../../types';
+import { TrendingUp, AlertCircle, Smile, Meh, Frown, Clock, MessageSquare, Users } from 'lucide-react';
+import type { MeetingAnalysis, MeetingSignalCounts, MeetingSignalType, ParticipantAnalysis } from '../../types';
 
 interface DisplayTranscriptItem {
   speaker: string;
   text: string;
   start: number;
+  end?: number;
 }
 
 interface MeetingAnalysisPanelProps {
@@ -29,10 +31,25 @@ const emotionLabels: Record<MeetingSignalType, string> = {
   tension: 'Tension'
 };
 
+const signalOrder: MeetingSignalType[] = ['agreement', 'disagreement', 'hesitation', 'tension'];
+
 const sentimentColors = {
   positive: '#10b981',
   neutral: '#6b7280',
   negative: '#ef4444'
+};
+
+const sentimentBadgeColors: Record<ParticipantAnalysis['sentiment'], string> = {
+  positive: 'bg-green-100 text-green-700 border-green-200',
+  neutral: 'bg-gray-100 text-gray-700 border-gray-200',
+  negative: 'bg-red-100 text-red-700 border-red-200',
+  mixed: 'bg-orange-100 text-orange-700 border-orange-200'
+};
+
+const engagementBadgeColors: Record<ParticipantAnalysis['engagement_level'], string> = {
+  low: 'bg-gray-100 text-gray-700 border-gray-200',
+  medium: 'bg-blue-100 text-blue-700 border-blue-200',
+  high: 'bg-purple-100 text-purple-700 border-purple-200'
 };
 
 const emptySignalCounts: MeetingSignalCounts = {
@@ -41,6 +58,8 @@ const emptySignalCounts: MeetingSignalCounts = {
   tension: 0,
   hesitation: 0
 };
+
+const emptyTranscripts: DisplayTranscriptItem[] = [];
 
 const signalToSentiment: Record<MeetingSignalType, SentimentBucket> = {
   agreement: 'positive',
@@ -72,9 +91,40 @@ const formatTime = (seconds: number): string => {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
 
+const formatDuration = (seconds: number): string => {
+  if (!Number.isFinite(seconds)) {
+    return '0s';
+  }
+
+  const totalSeconds = Math.max(0, Math.round(seconds));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+
+  if (mins === 0) {
+    return `${secs}s`;
+  }
+
+  if (secs === 0) {
+    return `${mins}m`;
+  }
+
+  return `${mins}m ${secs}s`;
+};
+
 const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
 const getSignalCounts = (analysis: MeetingAnalysis) => analysis.signal_counts ?? emptySignalCounts;
+
+const getSignalTotal = (counts: MeetingSignalCounts) =>
+  counts.agreement + counts.disagreement + counts.tension + counts.hesitation;
+
+const formatSignalSummary = (counts: MeetingSignalCounts) => {
+  const parts = signalOrder
+    .filter((signal) => counts[signal] > 0)
+    .map((signal) => `${counts[signal]} ${emotionLabels[signal].toLowerCase()}`);
+
+  return parts.length ? parts.join(', ') : 'No interaction signals';
+};
 
 const getSentimentIcon = (sentiment: MeetingAnalysis['overall_sentiment']) => {
   if (sentiment === 'positive') {
@@ -90,6 +140,34 @@ const getSentimentIcon = (sentiment: MeetingAnalysis['overall_sentiment']) => {
   }
 
   return <Meh className="w-5 h-5 text-gray-600" />;
+};
+
+const deriveParticipantSentiment = (counts: MeetingSignalCounts): ParticipantAnalysis['sentiment'] => {
+  const negativeSignals = counts.disagreement + counts.tension;
+  if (negativeSignals && counts.agreement) {
+    return 'mixed';
+  }
+  if (negativeSignals) {
+    return 'negative';
+  }
+  if (counts.agreement) {
+    return 'positive';
+  }
+  return 'neutral';
+};
+
+const deriveParticipantEngagement = (
+  transcriptCount: number,
+  signalTotal: number,
+  maxTranscriptCount: number
+): ParticipantAnalysis['engagement_level'] => {
+  if (signalTotal >= 2 || transcriptCount >= Math.max(3, maxTranscriptCount)) {
+    return 'high';
+  }
+  if (signalTotal >= 1 || transcriptCount > 0) {
+    return 'medium';
+  }
+  return 'low';
 };
 
 const buildSentimentDistribution = (analysis: MeetingAnalysis) => {
@@ -172,15 +250,110 @@ export const buildSentimentTrend = (analysis: MeetingAnalysis, transcripts: Disp
   return trend;
 };
 
-const buildParticipantEngagement = (
+interface ParticipantDetailRow {
+  name: string;
+  sentiment: ParticipantAnalysis['sentiment'];
+  engagementLevel: ParticipantAnalysis['engagement_level'];
+  engagementScore: number;
+  transcriptCount: number;
+  speakingTimeSeconds: number;
+  signalCounts: MeetingSignalCounts;
+  signalTotal: number;
+  signalSummary: string;
+  summary: string;
+}
+
+export const buildParticipantDetails = (
   analysis: MeetingAnalysis,
   transcripts: DisplayTranscriptItem[]
-) => {
+): ParticipantDetailRow[] => {
   if (analysis.participants?.length) {
     return analysis.participants.map((participant) => ({
       name: participant.speaker,
-      engagement: engagementScores[participant.engagement_level],
-      contributions: participant.transcript_count
+      sentiment: participant.sentiment,
+      engagementLevel: participant.engagement_level,
+      engagementScore: engagementScores[participant.engagement_level],
+      transcriptCount: participant.transcript_count,
+      speakingTimeSeconds: participant.speaking_time_seconds,
+      signalCounts: participant.signal_counts,
+      signalTotal: getSignalTotal(participant.signal_counts),
+      signalSummary: formatSignalSummary(participant.signal_counts),
+      summary: participant.engagement_summary
+    }));
+  }
+
+  const speakerStats = new Map<string, {
+    transcriptCount: number;
+    speakingTimeSeconds: number;
+    signalCounts: MeetingSignalCounts;
+  }>();
+
+  transcripts.forEach((transcript) => {
+    const speaker = transcript.speaker || 'Unknown';
+    const current = speakerStats.get(speaker) ?? {
+      transcriptCount: 0,
+      speakingTimeSeconds: 0,
+      signalCounts: { ...emptySignalCounts }
+    };
+    current.transcriptCount += 1;
+    if (typeof transcript.end === 'number') {
+      current.speakingTimeSeconds += Math.max(0, transcript.end - transcript.start);
+    }
+    speakerStats.set(speaker, current);
+  });
+
+  analysis.highlights.forEach((highlight) => {
+    const speaker = transcripts[highlight.transcript_index]?.speaker || 'Unknown';
+    const current = speakerStats.get(speaker) ?? {
+      transcriptCount: 0,
+      speakingTimeSeconds: 0,
+      signalCounts: { ...emptySignalCounts }
+    };
+    current.signalCounts[highlight.signal] += 1;
+    speakerStats.set(speaker, current);
+  });
+
+  const maxTranscriptCount = Math.max(
+    ...Array.from(speakerStats.values()).map((stats) => stats.transcriptCount),
+    1
+  );
+
+  return Array.from(speakerStats.entries())
+    .map(([name, stats]) => {
+      const signalTotal = getSignalTotal(stats.signalCounts);
+      const engagementLevel = deriveParticipantEngagement(
+        stats.transcriptCount,
+        signalTotal,
+        maxTranscriptCount
+      );
+      return {
+        name,
+        sentiment: deriveParticipantSentiment(stats.signalCounts),
+        engagementLevel,
+        engagementScore: engagementScores[engagementLevel],
+        transcriptCount: stats.transcriptCount,
+        speakingTimeSeconds: Math.round(stats.speakingTimeSeconds * 100) / 100,
+        signalCounts: stats.signalCounts,
+        signalTotal,
+        signalSummary: formatSignalSummary(stats.signalCounts),
+        summary: signalTotal
+          ? `${name} contributed ${stats.transcriptCount} utterances with ${signalTotal} interaction signals.`
+          : `${name} contributed ${stats.transcriptCount} utterances with no explicit interaction signals.`
+      };
+    })
+    .sort((left, right) => right.transcriptCount - left.transcriptCount || left.name.localeCompare(right.name));
+};
+
+const buildParticipantEngagement = (
+  analysis: MeetingAnalysis,
+  transcripts: DisplayTranscriptItem[],
+  participantDetails = buildParticipantDetails(analysis, transcripts)
+) => {
+  if (participantDetails.length) {
+    return participantDetails.map((participant) => ({
+      name: participant.name,
+      engagement: participant.engagementScore,
+      contributions: participant.transcriptCount
     }));
   }
 
@@ -266,9 +439,25 @@ const buildInsights = (analysis: MeetingAnalysis) => {
 };
 
 export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisPanelProps) {
-  const safeTranscripts = transcripts || [];
+  const safeTranscripts = transcripts ?? emptyTranscripts;
+  const derivedAnalysis = useMemo(() => {
+    if (!analysis) {
+      return null;
+    }
 
-  if (!analysis) {
+    const participantDetails = buildParticipantDetails(analysis, safeTranscripts);
+
+    return {
+      sentimentOverTime: buildSentimentTrend(analysis, safeTranscripts),
+      overallSentiment: buildSentimentDistribution(analysis),
+      participantDetails,
+      engagementByParticipant: buildParticipantEngagement(analysis, safeTranscripts, participantDetails),
+      emotionalMoments: buildEmotionalMoments(analysis, safeTranscripts),
+      insights: buildInsights(analysis)
+    };
+  }, [analysis, safeTranscripts]);
+
+  if (!analysis || !derivedAnalysis) {
     return (
       <div className="max-w-7xl mx-auto flex items-center justify-center py-20 text-gray-500">
         <p>Meeting analysis will appear here once the server processes the data.</p>
@@ -276,17 +465,20 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
     );
   }
 
-  const sentimentOverTime = buildSentimentTrend(analysis, safeTranscripts);
-  const overallSentiment = buildSentimentDistribution(analysis);
-  const engagementByParticipant = buildParticipantEngagement(analysis, safeTranscripts);
-  const emotionalMoments = buildEmotionalMoments(analysis, safeTranscripts);
-  const insights = buildInsights(analysis);
+  const {
+    sentimentOverTime,
+    overallSentiment,
+    participantDetails,
+    engagementByParticipant,
+    emotionalMoments,
+    insights
+  } = derivedAnalysis;
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm text-gray-500">Overall Sentiment</h3>
             {getSentimentIcon(analysis.overall_sentiment)}
@@ -297,7 +489,7 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
           </p>
         </div>
 
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm text-gray-500">Engagement Level</h3>
             <TrendingUp className="w-5 h-5 text-blue-600" />
@@ -308,7 +500,7 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
           </p>
         </div>
 
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm text-gray-500">Key Moments</h3>
             <AlertCircle className="w-5 h-5 text-orange-600" />
@@ -319,7 +511,7 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
       </div>
 
       {/* Sentiment Over Time Chart */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="min-w-0 bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
         <h2 className="text-gray-900 mb-4">Sentiment Trend Over Time</h2>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={sentimentOverTime}>
@@ -335,9 +527,9 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
         </ResponsiveContainer>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         {/* Overall Sentiment Distribution */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="min-w-0 bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <h2 className="text-gray-900 mb-4">Overall Sentiment Distribution</h2>
           <ResponsiveContainer width="100%" height={250}>
             <PieChart>
@@ -361,7 +553,7 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
         </div>
 
         {/* Engagement by Participant */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="min-w-0 bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
           <h2 className="text-gray-900 mb-4">Participant Engagement</h2>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={engagementByParticipant}>
@@ -375,9 +567,88 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
         </div>
       </div>
 
+      {participantDetails.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200">
+          <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between gap-4 sm:px-6">
+            <div className="min-w-0">
+              <h2 className="text-gray-900">Participant Details</h2>
+              <p className="text-sm text-gray-500 mt-1">Speaker-level sentiment, engagement, and interaction signals</p>
+            </div>
+            <Users className="w-5 h-5 text-blue-600 shrink-0" />
+          </div>
+
+          <div className="divide-y divide-gray-100">
+            {participantDetails.map((participant) => (
+              <div key={participant.name} className="p-4 sm:p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="min-w-0 break-words text-gray-900">{participant.name}</h3>
+                      <span className={`rounded border px-2 py-0.5 text-xs ${sentimentBadgeColors[participant.sentiment]}`}>
+                        {capitalize(participant.sentiment)}
+                      </span>
+                      <span className={`rounded border px-2 py-0.5 text-xs ${engagementBadgeColors[participant.engagementLevel]}`}>
+                        {capitalize(participant.engagementLevel)} engagement
+                      </span>
+                    </div>
+
+                    <p className="text-sm text-gray-600">{participant.summary}</p>
+
+                    <div className="flex flex-wrap gap-2">
+                      {participant.signalTotal > 0 ? (
+                        signalOrder
+                          .filter((signal) => participant.signalCounts[signal] > 0)
+                          .map((signal) => (
+                            <span
+                              key={signal}
+                              className={`rounded border px-2 py-1 text-xs ${emotionColors[signal]}`}
+                            >
+                              {participant.signalCounts[signal]} {emotionLabels[signal]}
+                            </span>
+                          ))
+                      ) : (
+                        <span className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-500">
+                          {participant.signalSummary}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3 lg:max-w-sm">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="mb-1 flex items-center gap-1.5 text-xs text-gray-500">
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        Utterances
+                      </div>
+                      <p className="text-gray-900">{participant.transcriptCount}</p>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="mb-1 flex items-center gap-1.5 text-xs text-gray-500">
+                        <Clock className="h-3.5 w-3.5" />
+                        Speaking
+                      </div>
+                      <p className="text-gray-900">{formatDuration(participant.speakingTimeSeconds)}</p>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="mb-1 flex items-center gap-1.5 text-xs text-gray-500">
+                        <TrendingUp className="h-3.5 w-3.5" />
+                        Score
+                      </div>
+                      <p className="text-gray-900">{participant.engagementScore}%</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Emotionally Significant Moments */}
       <div className="bg-white rounded-lg border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-200">
+        <div className="px-4 py-4 border-b border-gray-200 sm:px-6">
           <h2 className="text-gray-900">Emotionally Significant Moments</h2>
           <p className="text-sm text-gray-500 mt-1">Key emotional dynamics detected during the meeting</p>
         </div>
@@ -385,14 +656,14 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
         {emotionalMoments.length > 0 ? (
           <div className="divide-y divide-gray-100">
             {emotionalMoments.map((moment, index) => (
-              <div key={index} className="p-6">
-                <div className="flex items-start gap-4">
-                  <div className={`px-3 py-1 rounded-lg text-sm border ${emotionColors[moment.type]}`}>
+              <div key={index} className="p-4 sm:p-6">
+                <div className="flex flex-col items-start gap-4 sm:flex-row">
+                  <div className={`shrink-0 px-3 py-1 rounded-lg text-sm border ${emotionColors[moment.type]}`}>
                     {moment.emotion}
                   </div>
 
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-3 mb-2">
                       <span className="text-sm text-gray-900">{moment.speaker}</span>
                       <span className="text-xs text-gray-400">{moment.time}</span>
                       <span className={`text-xs px-2 py-0.5 rounded ${
@@ -406,7 +677,7 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
                       <p className="text-sm text-gray-700 italic">"{moment.text}"</p>
                     </div>
 
-                    <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+                    <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-gray-500">
                       {moment.type === 'disagreement' && (
                         <span className="flex items-center gap-1">
                           <Frown className="w-3 h-3" />
@@ -439,7 +710,7 @@ export function MeetingAnalysisPanel({ analysis, transcripts }: MeetingAnalysisP
       </div>
 
       {/* Insights */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 sm:p-6">
         <h3 className="text-sm text-blue-900 mb-2">AI Insights</h3>
         <ul className="space-y-2 text-sm text-blue-800">
           {insights.map((insight, index) => (

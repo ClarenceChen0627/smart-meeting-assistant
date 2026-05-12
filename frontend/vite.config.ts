@@ -9,9 +9,9 @@ const __dirname = path.dirname(__filename)
 const devProxyTarget = process.env.SMART_MEETING_DEV_PROXY_TARGET || 'http://localhost:8080'
 
 
-function figmaAssetResolver() {
+function localAssetResolver() {
   return {
-    name: 'figma-asset-resolver',
+    name: 'local-asset-resolver',
     resolveId(id: string) {
       if (id.startsWith('figma:asset/')) {
         const filename = id.replace('figma:asset/', '')
@@ -24,9 +24,8 @@ function figmaAssetResolver() {
 export default defineConfig({
   base: './',
   plugins: [
-    figmaAssetResolver(),
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
+    localAssetResolver(),
+    // The React and Tailwind plugins are both required by the Vite UI setup.
     react(),
     tailwindcss(),
   ],
@@ -47,6 +46,32 @@ export default defineConfig({
         target: devProxyTarget,
         changeOrigin: true,
         ws: true,
+      },
+    },
+  },
+
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return
+          }
+
+          if (id.includes('recharts') || id.includes('d3-') || id.includes('victory-vendor')) {
+            return 'charts'
+          }
+
+          if (id.includes('lucide-react')) {
+            return 'icons'
+          }
+
+          if (id.includes('@radix-ui')) {
+            return 'radix-ui'
+          }
+
+          return 'vendor'
+        },
       },
     },
   },

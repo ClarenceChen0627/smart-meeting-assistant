@@ -86,6 +86,7 @@ async def update_meeting_metadata(
     meeting_id: str,
     payload: MeetingMetadataUpdate,
 ) -> MeetingRecord:
+    before_meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
     try:
         meeting = request.app.state.meeting_history_service.update_metadata(meeting_id, payload)
     except ValueError as exc:
@@ -93,6 +94,27 @@ async def update_meeting_metadata(
 
     if meeting is None:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
+    audit_log_service = _audit_log_service(request)
+    if audit_log_service is not None:
+        audit_log_service.record_event(
+            scope=AuditLogService.SCOPE_MEETING,
+            meeting_id=meeting_id,
+            entity_type="meeting",
+            entity_id=meeting_id,
+            action="update",
+            field_path="metadata",
+            before={
+                "favorite": before_meeting.favorite if before_meeting else None,
+                "archived": before_meeting.archived if before_meeting else None,
+                "tags": before_meeting.tags if before_meeting else None,
+            },
+            after={
+                "favorite": meeting.favorite,
+                "archived": meeting.archived,
+                "tags": meeting.tags,
+            },
+            metadata={"manual": True, "updated_fields": sorted(payload.model_fields_set)},
+        )
     return meeting
 
 
@@ -257,7 +279,27 @@ async def update_action_item_status(
 
 @router.delete("/api/meetings/{meeting_id}", status_code=204)
 async def delete_meeting(request: Request, meeting_id: str) -> Response:
+    before_meeting = request.app.state.meeting_history_service.get_meeting(meeting_id)
     deleted = request.app.state.meeting_history_service.delete_meeting(meeting_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Meeting record not found.")
+    audit_log_service = _audit_log_service(request)
+    if audit_log_service is not None:
+        audit_log_service.record_event(
+            scope=AuditLogService.SCOPE_MEETING,
+            meeting_id=meeting_id,
+            entity_type="meeting",
+            entity_id=meeting_id,
+            action="delete",
+            field_path=None,
+            before={
+                "title": before_meeting.title if before_meeting else None,
+                "status": before_meeting.status if before_meeting else None,
+                "source_type": before_meeting.source_type if before_meeting else None,
+                "transcript_count": before_meeting.transcript_count if before_meeting else None,
+                "raw_audio_retained": before_meeting.raw_audio_retained if before_meeting else None,
+            },
+            after=None,
+            metadata={"manual": True},
+        )
     return Response(status_code=204)

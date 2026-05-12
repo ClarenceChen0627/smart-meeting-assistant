@@ -1,4 +1,13 @@
-export const asrProviderOptions = [
+import type { ASRProvider } from '../types';
+
+interface ASRProviderOption {
+  code: ASRProvider;
+  name: string;
+  description: string;
+  badge: string;
+}
+
+export const asrProviderOptions: ASRProviderOption[] = [
   {
     code: 'volcengine',
     name: 'Volcengine Doubao',
